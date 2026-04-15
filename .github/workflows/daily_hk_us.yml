@@ -31,6 +31,46 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Run A-share announcements (CNINFO test)
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          NOTION_UNIVERSE_DB_ID: ${{ secrets.NOTION_UNIVERSE_DB_ID }}
+          NOTION_EVENTS_DB_ID: ${{ secrets.NOTION_EVENTS_DB_ID }}
+          NOTION_RESEARCH_DB_ID: ${{ secrets.NOTION_RESEARCH_DB_ID }}
+          NOTION_RESEARCH_HISTORY_DB_ID: ${{ secrets.NOTION_RESEARCH_HISTORY_DB_ID }}
+          DMXAPI_KEY: ${{ secrets.DMXAPI_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          python -c "
+          from scheduler.jobs import _job_fetch_and_parse
+          _job_fetch_and_parse()
+          "
+
+      - name: Run A-share news (AKShare test)
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          NOTION_UNIVERSE_DB_ID: ${{ secrets.NOTION_UNIVERSE_DB_ID }}
+          NOTION_EVENTS_DB_ID: ${{ secrets.NOTION_EVENTS_DB_ID }}
+          NOTION_RESEARCH_DB_ID: ${{ secrets.NOTION_RESEARCH_DB_ID }}
+          NOTION_RESEARCH_HISTORY_DB_ID: ${{ secrets.NOTION_RESEARCH_HISTORY_DB_ID }}
+          DMXAPI_KEY: ${{ secrets.DMXAPI_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          python -c "
+          from data_ingestion.news_fetcher import fetch_news_for_ticker
+          from notion_sync.sync_manager import get_daily_tickers
+          tickers = get_daily_tickers()
+          # 只测试前3只A股，验证AKShare能否从境外访问
+          a_tickers = [t for t in tickers if t.endswith('.SH') or t.endswith('.SZ')][:3]
+          print(f'测试A股ticker: {a_tickers}')
+          for t in a_tickers:
+              try:
+                  news = fetch_news_for_ticker(t)
+                  print(f'[{t}] OK: {len(news)} 条新闻')
+              except Exception as e:
+                  print(f'[{t}] FAIL: {e}')
+          "
+
       - name: Run HK/US filings
         env:
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}

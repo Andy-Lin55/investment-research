@@ -1,4 +1,4 @@
-notion-client>=2.2.1
+notion-client==2.2.1
 openai>=1.30.0
 google-generativeai>=0.8.0
 tushare>=1.4.17

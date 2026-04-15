@@ -417,6 +417,40 @@ def _job_daily_news() -> None:
     job_daily_briefing()
 
 
+def _job_daily_news_a_share() -> None:
+    """仅抓取 A 股（AKShare）新闻，不触发简报，供 GitHub Actions 并行调用"""
+    logger.info("═" * 50)
+    logger.info("📰 开始 A 股新闻抓取（AKShare）")
+    from data_ingestion.news_fetcher import fetch_news_for_ticker
+    from notion_sync.sync_manager import create_event, event_exists, get_daily_tickers
+
+    tickers = [t for t in get_daily_tickers() if t.endswith(".SH") or t.endswith(".SZ")]
+    written = 0
+    skipped = 0
+    failed = 0
+
+    for ticker in tickers:
+        try:
+            news_list = fetch_news_for_ticker(ticker)
+            for parsed_data in news_list:
+                source_url = parsed_data.get("source_url", "")
+                event_type = parsed_data.get("event_type", "新闻资讯")
+                event_date = parsed_data.get("event_date", "")
+                if event_exists(ticker, event_type, event_date, source_url):
+                    skipped += 1
+                    continue
+                page_id = create_event(ticker, parsed_data)
+                if page_id:
+                    written += 1
+                else:
+                    skipped += 1
+        except Exception as e:
+            failed += 1
+            logger.error(f"A 股新闻抓取失败 [{ticker}]: {e}")
+
+    logger.info(f"📰 A 股新闻完成：写入 {written} 条，跳过 {skipped} 条，失败 {failed} 个 ticker")
+
+
 def job_daily_news_us() -> None:
     """仅抓取美股（Finnhub）新闻 + 触发简报，供 GitHub Actions 独立调用"""
     with _no_sleep("美股新闻"):

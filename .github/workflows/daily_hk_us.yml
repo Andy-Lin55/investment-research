@@ -1,122 +1,124 @@
-name: Daily HK/US Pipeline
+name: Daily Pipeline
 
 on:
   schedule:
     # UTC 23:30 = 北京 07:30（次日），工作日运行
     - cron: '30 23 * * 0-4'
   workflow_dispatch:
-    inputs:
-      send_briefing:
-        description: '运行后发送简报'
-        required: false
-        default: 'true'
-        type: boolean
+
+# 公共环境变量，所有 job 共享
+env:
+  NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+  NOTION_UNIVERSE_DB_ID: ${{ secrets.NOTION_UNIVERSE_DB_ID }}
+  NOTION_EVENTS_DB_ID: ${{ secrets.NOTION_EVENTS_DB_ID }}
+  NOTION_RESEARCH_DB_ID: ${{ secrets.NOTION_RESEARCH_DB_ID }}
+  NOTION_RESEARCH_HISTORY_DB_ID: ${{ secrets.NOTION_RESEARCH_HISTORY_DB_ID }}
+  DMXAPI_KEY: ${{ secrets.DMXAPI_KEY }}
+  GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
 
 jobs:
-  fetch:
-    name: HK/US Filings + US News + Briefing
+  # ── Job 1：A股公告（CNINFO + AI 解析）────────────────────────
+  a_share_announcements:
+    name: A-Share Announcements (CNINFO)
     runs-on: ubuntu-latest
-    timeout-minutes: 45
-
+    timeout-minutes: 30
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: 'pip'
-
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-
-      - name: Run A-share announcements (CNINFO test)
-        env:
-          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
-          NOTION_UNIVERSE_DB_ID: ${{ secrets.NOTION_UNIVERSE_DB_ID }}
-          NOTION_EVENTS_DB_ID: ${{ secrets.NOTION_EVENTS_DB_ID }}
-          NOTION_RESEARCH_DB_ID: ${{ secrets.NOTION_RESEARCH_DB_ID }}
-          NOTION_RESEARCH_HISTORY_DB_ID: ${{ secrets.NOTION_RESEARCH_HISTORY_DB_ID }}
-          DMXAPI_KEY: ${{ secrets.DMXAPI_KEY }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      - run: pip install -r requirements.txt
+      - name: Run A-share announcements
         run: |
           python -c "
           from scheduler.jobs import _job_fetch_and_parse
           _job_fetch_and_parse()
           "
 
-      - name: Run A-share news (AKShare test)
-        env:
-          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
-          NOTION_UNIVERSE_DB_ID: ${{ secrets.NOTION_UNIVERSE_DB_ID }}
-          NOTION_EVENTS_DB_ID: ${{ secrets.NOTION_EVENTS_DB_ID }}
-          NOTION_RESEARCH_DB_ID: ${{ secrets.NOTION_RESEARCH_DB_ID }}
-          NOTION_RESEARCH_HISTORY_DB_ID: ${{ secrets.NOTION_RESEARCH_HISTORY_DB_ID }}
-          DMXAPI_KEY: ${{ secrets.DMXAPI_KEY }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+  # ── Job 2：A股新闻（AKShare 东方财富）────────────────────────
+  a_share_news:
+    name: A-Share News (AKShare)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      - run: pip install -r requirements.txt
+      - name: Run A-share news
         run: |
           python -c "
-          from data_ingestion.news_fetcher import fetch_news_for_ticker
-          from notion_sync.sync_manager import get_daily_tickers
-          tickers = get_daily_tickers()
-          # 只测试前3只A股，验证AKShare能否从境外访问
-          a_tickers = [t for t in tickers if t.endswith('.SH') or t.endswith('.SZ')][:3]
-          print(f'测试A股ticker: {a_tickers}')
-          for t in a_tickers:
-              try:
-                  news = fetch_news_for_ticker(t)
-                  print(f'[{t}] OK: {len(news)} 条新闻')
-              except Exception as e:
-                  print(f'[{t}] FAIL: {e}')
+          from scheduler.jobs import _job_daily_news_a_share
+          _job_daily_news_a_share()
           "
 
+  # ── Job 3：HK/US 文件（HKEX + SEC EDGAR）────────────────────
+  hk_us_filings:
+    name: HK/US Filings (HKEX + SEC)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      - run: pip install -r requirements.txt
       - name: Run HK/US filings
-        env:
-          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
-          NOTION_UNIVERSE_DB_ID: ${{ secrets.NOTION_UNIVERSE_DB_ID }}
-          NOTION_EVENTS_DB_ID: ${{ secrets.NOTION_EVENTS_DB_ID }}
-          NOTION_RESEARCH_DB_ID: ${{ secrets.NOTION_RESEARCH_DB_ID }}
-          NOTION_RESEARCH_HISTORY_DB_ID: ${{ secrets.NOTION_RESEARCH_HISTORY_DB_ID }}
-          DMXAPI_KEY: ${{ secrets.DMXAPI_KEY }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
           python -c "
           from scheduler.jobs import _job_fetch_filings
           _job_fetch_filings()
           "
 
-      - name: Run US news (Finnhub)
-        env:
-          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
-          NOTION_UNIVERSE_DB_ID: ${{ secrets.NOTION_UNIVERSE_DB_ID }}
-          NOTION_EVENTS_DB_ID: ${{ secrets.NOTION_EVENTS_DB_ID }}
-          NOTION_RESEARCH_DB_ID: ${{ secrets.NOTION_RESEARCH_DB_ID }}
-          NOTION_RESEARCH_HISTORY_DB_ID: ${{ secrets.NOTION_RESEARCH_HISTORY_DB_ID }}
-          FINNHUB_KEY: ${{ secrets.FINNHUB_KEY }}
-          DMXAPI_KEY: ${{ secrets.DMXAPI_KEY }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+  # ── Job 4：美股新闻（Finnhub）────────────────────────────────
+  us_news:
+    name: US News (Finnhub)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      FINNHUB_KEY: ${{ secrets.FINNHUB_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      - run: pip install -r requirements.txt
+      - name: Run US news
         run: |
           python -c "
           from scheduler.jobs import _job_daily_news_us
           _job_daily_news_us()
           "
 
+  # ── Job 5：每日简报（等所有数据 job 完成后发送）──────────────
+  briefing:
+    name: Send Daily Briefing
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [a_share_announcements, a_share_news, hk_us_filings, us_news]
+    # 即使某个数据 job 失败，仍发送简报（用已写入的数据）
+    if: always()
+    env:
+      FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}
+      SMTP_HOST: ${{ secrets.SMTP_HOST }}
+      SMTP_PORT: ${{ secrets.SMTP_PORT }}
+      SMTP_USER: ${{ secrets.SMTP_USER }}
+      SMTP_PASS: ${{ secrets.SMTP_PASS }}
+      BRIEFING_TO_EMAIL: ${{ secrets.BRIEFING_TO_EMAIL }}
+      BRIEFING_FROM_EMAIL: ${{ secrets.BRIEFING_FROM_EMAIL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      - run: pip install -r requirements.txt
       - name: Send daily briefing
-        # 在 HK/US 数据全部写入 Notion 后触发简报
-        # 本机 A股数据（07:30 起）理论上早于 GitHub Actions 本步（约 08:00），可涵盖全市场
-        env:
-          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
-          NOTION_EVENTS_DB_ID: ${{ secrets.NOTION_EVENTS_DB_ID }}
-          DMXAPI_KEY: ${{ secrets.DMXAPI_KEY }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}
-          SMTP_HOST: ${{ secrets.SMTP_HOST }}
-          SMTP_PORT: ${{ secrets.SMTP_PORT }}
-          SMTP_USER: ${{ secrets.SMTP_USER }}
-          SMTP_PASS: ${{ secrets.SMTP_PASS }}
-          BRIEFING_TO_EMAIL: ${{ secrets.BRIEFING_TO_EMAIL }}
-          BRIEFING_FROM_EMAIL: ${{ secrets.BRIEFING_FROM_EMAIL }}
         run: |
           python -c "
           from scheduler.jobs import _job_daily_briefing

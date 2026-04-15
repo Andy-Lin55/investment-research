@@ -1,0 +1,40 @@
+name: Weekly Financials Snapshot
+
+on:
+  schedule:
+    # 周日 UTC 14:00 = 北京 22:00
+    - cron: '0 14 * * 0'
+  workflow_dispatch: {}
+
+jobs:
+  financials:
+    name: Weekly Financial Snapshot (Coverage + Active + Watch)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run financial snapshot
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          NOTION_UNIVERSE_DB_ID: ${{ secrets.NOTION_UNIVERSE_DB_ID }}
+          NOTION_EVENTS_DB_ID: ${{ secrets.NOTION_EVENTS_DB_ID }}
+          NOTION_RESEARCH_DB_ID: ${{ secrets.NOTION_RESEARCH_DB_ID }}
+          NOTION_RESEARCH_HISTORY_DB_ID: ${{ secrets.NOTION_RESEARCH_HISTORY_DB_ID }}
+          TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
+        run: |
+          python -c "
+          from scheduler.jobs import _job_weekly_financials
+          _job_weekly_financials()
+          "

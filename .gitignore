@@ -1,0 +1,28 @@
+# Secrets
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+dist/
+build/
+
+# Logs
+*.log
+logs/
+
+# Temp / downloads
+/tmp/
+/downloads/
+/research_archive/
+_backup_*/
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/

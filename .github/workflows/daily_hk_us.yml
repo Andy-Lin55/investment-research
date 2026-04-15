@@ -1,0 +1,84 @@
+name: Daily HK/US Pipeline
+
+on:
+  schedule:
+    # UTC 23:30 = 北京 07:30（次日），工作日运行
+    - cron: '30 23 * * 0-4'
+  workflow_dispatch:
+    inputs:
+      send_briefing:
+        description: '运行后发送简报'
+        required: false
+        default: 'true'
+        type: boolean
+
+jobs:
+  fetch:
+    name: HK/US Filings + US News + Briefing
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run HK/US filings
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          NOTION_UNIVERSE_DB_ID: ${{ secrets.NOTION_UNIVERSE_DB_ID }}
+          NOTION_EVENTS_DB_ID: ${{ secrets.NOTION_EVENTS_DB_ID }}
+          NOTION_RESEARCH_DB_ID: ${{ secrets.NOTION_RESEARCH_DB_ID }}
+          NOTION_RESEARCH_HISTORY_DB_ID: ${{ secrets.NOTION_RESEARCH_HISTORY_DB_ID }}
+          DMXAPI_KEY: ${{ secrets.DMXAPI_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          python -c "
+          from scheduler.jobs import _job_fetch_filings
+          _job_fetch_filings()
+          "
+
+      - name: Run US news (Finnhub)
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          NOTION_UNIVERSE_DB_ID: ${{ secrets.NOTION_UNIVERSE_DB_ID }}
+          NOTION_EVENTS_DB_ID: ${{ secrets.NOTION_EVENTS_DB_ID }}
+          NOTION_RESEARCH_DB_ID: ${{ secrets.NOTION_RESEARCH_DB_ID }}
+          NOTION_RESEARCH_HISTORY_DB_ID: ${{ secrets.NOTION_RESEARCH_HISTORY_DB_ID }}
+          FINNHUB_KEY: ${{ secrets.FINNHUB_KEY }}
+          DMXAPI_KEY: ${{ secrets.DMXAPI_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          python -c "
+          from scheduler.jobs import _job_daily_news_us
+          _job_daily_news_us()
+          "
+
+      - name: Send daily briefing
+        # 在 HK/US 数据全部写入 Notion 后触发简报
+        # 本机 A股数据（07:30 起）理论上早于 GitHub Actions 本步（约 08:00），可涵盖全市场
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          NOTION_EVENTS_DB_ID: ${{ secrets.NOTION_EVENTS_DB_ID }}
+          DMXAPI_KEY: ${{ secrets.DMXAPI_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          BRIEFING_TO_EMAIL: ${{ secrets.BRIEFING_TO_EMAIL }}
+          BRIEFING_FROM_EMAIL: ${{ secrets.BRIEFING_FROM_EMAIL }}
+        run: |
+          python -c "
+          from scheduler.jobs import _job_daily_briefing
+          _job_daily_briefing()
+          "

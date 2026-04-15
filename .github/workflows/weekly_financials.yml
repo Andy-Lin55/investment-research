@@ -33,6 +33,7 @@ jobs:
           NOTION_RESEARCH_DB_ID: ${{ secrets.NOTION_RESEARCH_DB_ID }}
           NOTION_RESEARCH_HISTORY_DB_ID: ${{ secrets.NOTION_RESEARCH_HISTORY_DB_ID }}
           TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
+          FINNHUB_KEY: ${{ secrets.FINNHUB_KEY }}
         run: |
           python -c "
           from scheduler.jobs import _job_weekly_financials

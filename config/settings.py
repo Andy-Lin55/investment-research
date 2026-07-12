@@ -34,7 +34,7 @@ GEMINI_BASE_URL: str = "https://generativelanguage.googleapis.com/v1beta/openai/
 GEMINI_MODEL: str    = "gemini-3.1-pro-preview"
 
 # ── 每日简报通知 ──────────────────────────────────────────────
-BRIEFING_TO_EMAIL: str = os.getenv("BRIEFING_TO_EMAIL", "andylin@upcredit.co")
+BRIEFING_TO_EMAIL: str = os.getenv("BRIEFING_TO_EMAIL", "andyl603504@icloud.com")
 SMTP_HOST: str = os.getenv("SMTP_HOST", "smtp.gmail.com")
 SMTP_PORT: int = int(os.getenv("SMTP_PORT", "465"))
 SMTP_USER: str = os.getenv("SMTP_USER", "")

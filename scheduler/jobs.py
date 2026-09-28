@@ -301,13 +301,13 @@ def _job_daily_briefing() -> None:
     logger.info("═" * 50)
     logger.info("📋 开始生成每日简报")
     from notion_sync.notion_client_wrapper import get_client
-    from config.settings import NOTION_EVENTS_DB_ID, BRIEFING_TO_EMAIL
+    from config.settings import NOTION_EVENTS_DB_ID
     from data_ingestion.ai_client import call_ai as _call_ai_briefing
-    import subprocess
+    from scheduler.briefing import beijing_today, build_daily_briefing
 
     from notion_sync.notion_client_wrapper import notion_request_with_retry
     client = get_client()
-    today = date.today().isoformat()
+    today = beijing_today()
 
     # 1. 查 Notion Events DB：今日 High + Medium 事件
     try:
@@ -334,39 +334,17 @@ def _job_daily_briefing() -> None:
         logger.info(f"今日（{today}）无 High/Medium 事件，跳过简报")
         return
 
-    # 2. 格式化事件列表
-    lines = []
-    for page in events:
-        props = page.get("properties", {})
-        name   = (props.get("Name",       {}).get("title",     [{}])[0].get("plain_text", ""))
-        ticker = (props.get("Ticker",     {}).get("rich_text", [{}])[0].get("plain_text", ""))
-        etype  = ((props.get("EventType", {}).get("select") or {}).get("name", ""))
-        signal = ((props.get("Signal",    {}).get("select") or {}).get("name", "中性"))
-        imp    = ((props.get("Importance",{}).get("select") or {}).get("name", ""))
-        summ_rt = props.get("AI Summary", {}).get("rich_text", [])
-        summary = summ_rt[0]["plain_text"] if summ_rt else ""
-        lines.append(
-            f"[{imp}][{signal}] {ticker} {etype}: {name}\n  摘要: {summary[:200]}"
-        )
-    events_text = "\n\n".join(lines)
-
-    # 3. AI 生成自然语言简报（DMXAPI → Gemini fallback）
-    prompt = (
-        f"今天是 {today}，以下是投资组合监控系统今日捕获的重要事件（共 {len(events)} 条）：\n\n"
-        f"{events_text}\n\n"
-        "请用简洁的中文，以投资者视角，撰写一份今日晨间投研简报。"
-        "结构：先总结今日整体情况（1-2句），再逐条点评重要事件的投资影响，"
-        "最后给出今日需要重点关注的1-2个风险或机会。"
-        "语气专业但简洁，不要废话，总长度控制在300字以内。"
-    )
-    briefing_body = _call_ai_briefing(prompt, timeout=30)
-    if briefing_body:
+    # 2. AI 生成自然语言简报（DMXAPI → Gemini fallback）
+    material = build_daily_briefing(events, today)
+    analysis = _call_ai_briefing(material.prompt, timeout=90)
+    if analysis:
         logger.info("AI 简报生成成功")
     else:
         logger.warning("AI 生成简报失败，降级为原始事件列表")
-        briefing_body = f"今日事件列表（{len(events)} 条）：\n\n" + events_text
+    briefing_body = material.render(analysis)
+    logger.info(f"每日简报正文长度：{len(briefing_body)} 字")
 
-    # 4. 发送简报：Feishu → SMTP → Apple Mail（按优先级）
+    # 3. 发送简报：Feishu → SMTP → Apple Mail（按优先级）
     subject = f"📊 投研日报 {today}（{len(events)} 条事件）"
     _send_briefing(subject, briefing_body, today)
 

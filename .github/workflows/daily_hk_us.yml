@@ -14,6 +14,8 @@ env:
   NOTION_RESEARCH_DB_ID: ${{ secrets.NOTION_RESEARCH_DB_ID }}
   NOTION_RESEARCH_HISTORY_DB_ID: ${{ secrets.NOTION_RESEARCH_HISTORY_DB_ID }}
   DMXAPI_KEY: ${{ secrets.DMXAPI_KEY }}
+  DMXAPI_BASE_URL: ${{ vars.DMXAPI_BASE_URL || 'https://www.dmxapi.cn/v1' }}
+  DMXAPI_MODEL: ${{ vars.DMXAPI_MODEL || 'gemini-3.8-flash' }}
   GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 

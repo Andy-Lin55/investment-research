@@ -61,3 +61,63 @@ def test_briefing_prioritizes_high_events_and_preserves_fallback():
     assert "中等事件摘要" in body
     assert "AI 分析暂不可用" in body
     assert "资料来源" in body
+
+
+def test_each_event_summary_is_limited_to_500_characters():
+    from scheduler.briefing import build_daily_briefing
+
+    summary = "A" * 500 + "B" * 100
+    briefing = build_daily_briefing([_event("AAPL 公告", "High", summary)], "2026-09-28")
+
+    assert "A" * 500 in briefing.prompt
+    assert "B" not in briefing.prompt
+    assert "B" not in briefing.render("")
+
+
+def test_email_stays_within_3000_characters_with_many_events_and_long_ai_text():
+    from scheduler.briefing import build_daily_briefing
+
+    events = [
+        _event(f"AAPL 事件 {i}", "High", "事件资料。" * 110, source_url=f"https://example.com/filing/{i}")
+        for i in range(12)
+    ]
+    briefing = build_daily_briefing(events, "2026-09-28")
+
+    for analysis in ("分析结论。" * 900, ""):
+        body = briefing.render(analysis)
+        assert len(body) <= 3000
+        assert "资料来源" in body
+        assert "https://example.com/filing/0" in body
+        assert "重点事件 12 条" in body
+
+
+def test_email_keeps_complete_analysis_when_total_fits():
+    from scheduler.briefing import build_daily_briefing
+
+    analysis = "分析。" * 700
+    event = _event("AAPL 公告", "High", "已确认事实。" * 40, source_url="https://example.com/filing")
+
+    body = build_daily_briefing([event], "2026-09-28").render(analysis)
+
+    assert analysis in body
+    assert len(body) <= 3000
+
+
+def test_email_compacts_long_source_list_without_losing_first_link():
+    from scheduler.briefing import build_daily_briefing
+
+    first_url = "https://example.com/0/" + "a" * 100
+    events = [
+        _event(
+            f"AAPL 事件 {i}", "High", "已确认事实。" * 90,
+            source_url=f"https://example.com/{i}/" + "a" * 100,
+        )
+        for i in range(50)
+    ]
+
+    briefing = build_daily_briefing(events, "2026-09-28")
+    for analysis in ("分析。" * 900, ""):
+        body = briefing.render(analysis)
+        assert len(body) <= 3000
+        assert first_url in body
+        assert "条来源略" in body

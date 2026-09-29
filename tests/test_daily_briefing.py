@@ -74,7 +74,7 @@ def test_each_event_summary_is_limited_to_500_characters():
     assert "B" not in briefing.render("")
 
 
-def test_email_stays_within_3000_characters_with_many_events_and_long_ai_text():
+def test_email_preserves_long_analysis_and_all_event_details():
     from scheduler.briefing import build_daily_briefing
 
     events = [
@@ -83,15 +83,20 @@ def test_email_stays_within_3000_characters_with_many_events_and_long_ai_text():
     ]
     briefing = build_daily_briefing(events, "2026-09-28")
 
-    for analysis in ("分析结论。" * 900, ""):
-        body = briefing.render(analysis)
-        assert len(body) <= 3000
+    analysis = "分析结论。" * 900
+    for analysis_text in (analysis, ""):
+        body = briefing.render(analysis_text)
+        assert len(body) > 3000
         assert "资料来源" in body
         assert "https://example.com/filing/0" in body
+        assert "https://example.com/filing/11" in body
+        assert "[12]" in body
         assert "重点事件 12 条" in body
+        if analysis_text:
+            assert analysis in body
 
 
-def test_email_keeps_complete_analysis_when_total_fits():
+def test_email_keeps_complete_analysis():
     from scheduler.briefing import build_daily_briefing
 
     analysis = "分析。" * 700
@@ -100,10 +105,10 @@ def test_email_keeps_complete_analysis_when_total_fits():
     body = build_daily_briefing([event], "2026-09-28").render(analysis)
 
     assert analysis in body
-    assert len(body) <= 3000
+    assert "3000 字" not in body
 
 
-def test_email_compacts_long_source_list_without_losing_first_link():
+def test_email_keeps_all_sources_even_when_list_is_long():
     from scheduler.briefing import build_daily_briefing
 
     first_url = "https://example.com/0/" + "a" * 100
@@ -118,6 +123,7 @@ def test_email_compacts_long_source_list_without_losing_first_link():
     briefing = build_daily_briefing(events, "2026-09-28")
     for analysis in ("分析。" * 900, ""):
         body = briefing.render(analysis)
-        assert len(body) <= 3000
         assert first_url in body
-        assert "条来源略" in body
+        assert "https://example.com/49/" in body
+        assert "条来源略" not in body
+    assert "不超过 3000 字" not in briefing.prompt

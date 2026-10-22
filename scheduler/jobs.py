@@ -51,6 +51,8 @@ from notion_sync.sync_manager import (
 def _infer_event_type(title: str) -> str:
     """根据公告标题推断事件类型，避免同日期不同文件的幂等 key 碰撞"""
     t = title
+    if "股东大会" in t or "股东会" in t:
+        return "股东会"
     # 注意：先检查更具体的子串（半年度报告 > 年度报告）
     if "半年度报告" in t or "中期报告" in t or "半年报告" in t:
         return "中期报告"
@@ -292,7 +294,7 @@ def _send_briefing(subject: str, body: str, today: str) -> None:
 
 
 def job_daily_briefing() -> None:
-    """从 Notion Events DB 汇总当日 High Importance 事件，打印简报"""
+    """汇总重要新闻，逐份解析公司第一手披露并发送每日简报。"""
     with _no_sleep("每日简报"):
         _job_daily_briefing()
 
@@ -303,39 +305,38 @@ def _job_daily_briefing() -> None:
     from notion_sync.notion_client_wrapper import get_client
     from config.settings import NOTION_EVENTS_DB_ID
     from data_ingestion.ai_client import call_ai as _call_ai_briefing
-    from scheduler.briefing import beijing_today, build_daily_briefing
+    from scheduler.briefing import beijing_today, build_daily_briefing, fetch_briefing_events
+    from data_ingestion.disclosure_analysis import analyze_disclosure, disclosure_key, is_primary_disclosure
 
     from notion_sync.notion_client_wrapper import notion_request_with_retry
     client = get_client()
     today = beijing_today()
 
-    # 1. 查 Notion Events DB：今日 High + Medium 事件
+    # Include newly processed disclosures even when their publication date is earlier.
     try:
-        res = notion_request_with_retry(
-            client.databases.query,
-            database_id=NOTION_EVENTS_DB_ID,
-            filter={
-                "and": [
-                    {"property": "EventDate", "date": {"equals": today}},
-                    {"or": [
-                        {"property": "Importance", "select": {"equals": "High"}},
-                        {"property": "Importance", "select": {"equals": "Medium"}},
-                    ]},
-                ]
-            },
-            page_size=50,
+        events = fetch_briefing_events(
+            lambda **kwargs: notion_request_with_retry(client.databases.query, **kwargs),
+            NOTION_EVENTS_DB_ID, today,
         )
-        events = res.get("results", [])
     except Exception as e:
         logger.error(f"简报查询 Notion 失败: {e}")
         return
 
     if not events:
-        logger.info(f"今日（{today}）无 High/Medium 事件，跳过简报")
+        logger.info(f"今日（{today}）无重要新闻或公司第一手披露，跳过简报")
         return
 
-    # 2. AI 生成自然语言简报（DMXAPI → Gemini fallback）
-    material = build_daily_briefing(events, today)
+    primary_analyses = {}
+    for page in events:
+        if is_primary_disclosure(page):
+            result = analyze_disclosure(page)
+            primary_analyses[disclosure_key(page)] = result
+            log = logger.info if result.status == "complete" else logger.warning
+            log(f"第一手披露详解 [{disclosure_key(page)}]: {result.status}，{len(result.body)} 字")
+    logger.info(f"简报事件 {len(events)} 条，第一手披露详解 {len(primary_analyses)} 条")
+
+    # The overview cannot replace or truncate the independent disclosure sections.
+    material = build_daily_briefing(events, today, primary_analyses)
     analysis = _call_ai_briefing(material.prompt, timeout=90)
     if analysis:
         logger.info("AI 简报生成成功")

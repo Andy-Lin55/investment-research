@@ -9,6 +9,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 import requests
 from loguru import logger
@@ -48,7 +49,7 @@ def _parse_stock_code(ticker: str) -> str:
 def _ts_to_date(ts_ms) -> str:
     """毫秒时间戳 → YYYY-MM-DD"""
     try:
-        return datetime.fromtimestamp(int(ts_ms) / 1000).strftime("%Y-%m-%d")
+        return datetime.fromtimestamp(int(ts_ms) / 1000, ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d")
     except Exception:
         return ""
 

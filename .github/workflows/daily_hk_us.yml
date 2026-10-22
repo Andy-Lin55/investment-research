@@ -100,7 +100,7 @@ jobs:
   briefing:
     name: Send Daily Briefing
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 60
     needs: [a_share_announcements, a_share_news, hk_us_filings, us_news]
     # 即使某个数据 job 失败，仍发送简报（用已写入的数据）
     if: always()

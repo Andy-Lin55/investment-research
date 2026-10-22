@@ -1,12 +1,12 @@
 from datetime import datetime, timezone
 
 
-def _event(name, importance, summary, key_numbers="{}", source_url=""):
+def _event(name, importance, summary, key_numbers="{}", source_url="", event_type="新闻资讯"):
     return {
         "properties": {
             "Name": {"title": [{"plain_text": name}]},
             "Ticker": {"rich_text": [{"plain_text": "AAPL"}]},
-            "EventType": {"select": {"name": "公告"}},
+            "EventType": {"select": {"name": event_type}},
             "Importance": {"select": {"name": importance}},
             "Signal": {"select": {"name": "Hold"}},
             "AI Summary": {"rich_text": [{"plain_text": summary[:180]}, {"plain_text": summary[180:]}]},

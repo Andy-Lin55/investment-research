@@ -23,6 +23,12 @@ TUSHARE_TOKEN: str = os.getenv("TUSHARE_TOKEN", "")
 # ── Finnhub ──────────────────────────────────────────────────
 FINNHUB_KEY: str = os.getenv("FINNHUB_KEY", "")
 
+# ── Optional local ChatGPT/Codex subscription ────────────────
+CODEX_SUBSCRIPTION_ENABLED: bool = os.getenv("CODEX_SUBSCRIPTION_ENABLED", "false").lower() in {"true", "1", "yes"}
+CODEX_CLI_PATH: str = os.getenv("CODEX_CLI_PATH", "codex")
+CODEX_MODEL: str = os.getenv("CODEX_MODEL", "")
+CODEX_TIMEOUT_SECONDS: int = int(os.getenv("CODEX_TIMEOUT_SECONDS", "60"))
+
 # ── DMXAPI (OpenAI-compatible) ───────────────────────────────
 DMXAPI_KEY: str = os.getenv("DMXAPI_KEY", "")
 DMXAPI_BASE_URL: str = "https://www.dmxapi.cn/v1"

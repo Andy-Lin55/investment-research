@@ -252,12 +252,10 @@ def _send_briefing(subject: str, body: str, today: str) -> None:
     if SMTP_USER and SMTP_PASS:
         try:
             import smtplib
-            from email.message import EmailMessage
-            msg = EmailMessage()
-            msg["Subject"] = subject
-            msg["From"] = BRIEFING_FROM_EMAIL or SMTP_USER
-            msg["To"] = BRIEFING_TO_EMAIL
-            msg.set_content(body)
+            from scheduler.email_renderer import build_briefing_message
+            msg = build_briefing_message(
+                subject, body, today, BRIEFING_FROM_EMAIL or SMTP_USER, BRIEFING_TO_EMAIL,
+            )
             with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=30) as s:
                 s.login(SMTP_USER, SMTP_PASS)
                 s.send_message(msg)

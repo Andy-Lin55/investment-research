@@ -79,3 +79,17 @@ def test_cli_defaults_to_dry_run_with_no_company_writes(tmp_path, capsys):
     assert cli.main([str(source), str(company), "--ticker", "000001.SZ", "--as-of", "2026-10-27", "--currency", "CNY"]) == 0
     assert json.loads(capsys.readouterr().out)["written"] is False
     assert list(company.iterdir()) == []
+
+
+def test_superseded_source_changes_still_produce_distinct_retained_versions(tmp_path):
+    from tests.test_financial_statements import row
+    args = dict(ticker="000001.SZ", as_of="2026-10-27", currency="CNY", company_dir=tmp_path, write=True)
+    first_data = inputs(); first_data["income"].append(row(ann="20260820", revenue=110))
+    first = api().prepare_workpapers(first_data, **args)
+    changed = inputs(); changed["income"][0]["revenue"] = 999
+    changed["income"].append(row(ann="20260820", revenue=110))
+    second = api().prepare_workpapers(changed, **args)
+    assert first["version_id"] != second["version_id"]
+    for item, expected in [(first, 100), (second, 999)]:
+        source = json.loads((tmp_path / item["data_relative_path"] / "source_income.json").read_text())
+        assert source[0]["revenue"] == expected

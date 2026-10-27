@@ -33,6 +33,11 @@ def normalize(data=None, **kwargs):
                                       currency="CNY", **kwargs)
 
 
+def comparison(current, previous):
+    return {"current_revision_id": current["revision_id"], "previous_revision_id": previous["revision_id"],
+            "source_locator": "synthetic primary report comparative accounting basis", "basis_confirmed": True}
+
+
 def test_keeps_all_three_statements_raw_units_and_missing_versus_zero():
     data = inputs()
     data["income"][0].update(unknown_amount=12, sell_exp=None, fin_exp=float("nan"), other_amount=0)
@@ -121,12 +126,73 @@ def test_derive_quarter_is_explicit_and_uses_adjacent_cumulative_periods():
     data["income"] = [row("20250331", "20250420", revenue=40, basic_eps=0.4),
                        row("20250630", "20250820", revenue=90, basic_eps=0.85)]
     rows = normalize(data)["statements"]["income"]
-    q = api().derive_quarter(rows[1], rows[0])
+    q = api().derive_quarter(rows[1], rows[0], comparability=comparison(rows[1], rows[0]))
     assert q["values"]["revenue"] == 50
     assert "basic_eps" not in q["values"]
     assert q["value_kind"] == "derived"
     assert q["period_start"] == "2025-04-01"
     assert len(q["derived_from"]) == 2
+    assert q["comparability_evidence"]["source_locator"]
+
+
+def test_quarter_requires_source_evidence_for_matching_accounting_basis():
+    data = inputs()
+    data["income"] = [row("20250331", "20250420", revenue=40), row("20250630", "20250820", revenue=90)]
+    a, b = normalize(data)["statements"]["income"]
+    with pytest.raises(ValueError, match="comparability"):
+        api().derive_quarter(b, a)
+    evidence = comparison(b, a); evidence["previous_revision_id"] = "different-revision"
+    with pytest.raises(ValueError, match="comparability"):
+        api().derive_quarter(b, a, comparability=evidence)
+
+
+def test_quarter_does_not_mix_later_q1_revision_with_older_half_year():
+    data = inputs()
+    data["income"] = [row("20250331", "20260420", revenue=80), row("20250630", "20250820", revenue=90)]
+    a, b = normalize(data)["statements"]["income"]
+    with pytest.raises(ValueError, match="revision"):
+        api().derive_quarter(b, a, comparability=comparison(b, a))
+
+
+@pytest.mark.parametrize("order", [(0, 1, 2), (0, 2, 1), (2, 0, 1)])
+def test_superseded_conflicts_are_detected_independently_of_source_order(order):
+    data = inputs()
+    rows = [row(revenue=100), row(revenue=101), row(ann="20260820", revenue=110)]
+    data["income"] = [rows[i] for i in order]
+    with pytest.raises(ValueError, match="conflict"):
+        normalize(data)
+
+
+def test_empty_statement_rows_do_not_count_as_usable_financial_coverage():
+    data = {key: [row(f"{y}{end}", f"{y+1}0220", revenue=None) for y in range(2021, 2026)
+                  for end in ("0331", "0630", "0930", "1231")] for key in inputs()}
+    package = normalize(data)
+    assert package["missing_statements"] == []
+    assert len(package["annual_periods"]) == 5
+    assert package["missing_financial_data"]
+    assert package["status"] == "incomplete"
+
+
+def test_core_financial_coverage_preserves_reported_zeroes():
+    data = inputs()
+    for rows in data.values():
+        for key in rows[0].keys() - {"ts_code", "end_date", "ann_date", "f_ann_date", "report_type", "comp_type", "update_flag"}:
+            rows[0][key] = 0
+    package = normalize(data, annual_years=1, interim_periods=1)
+    assert package["missing_financial_data"] == []
+    assert package["status"] == "ready_for_review"
+    data["cashflow"][0]["n_cashflow_inv_act"] = None
+    assert normalize(data, annual_years=1, interim_periods=1)["status"] == "incomplete"
+
+
+def test_quarter_cash_opening_closing_and_eps_are_never_subtracted():
+    data = inputs()
+    values = dict(n_cashflow_act=20, c_cash_equ_beg_period=100, c_cash_equ_end_period=120,
+                  beg_bal_cash=100, end_bal_cash=120, beg_bal_cash_equ=0, end_bal_cash_equ=0)
+    data["cashflow"] = [row("20250331", "20250420", **values), row("20250630", "20250820", **dict(values, n_cashflow_act=45))]
+    a, b = normalize(data)["statements"]["cashflow"]
+    quarter = api().derive_quarter(b, a, comparability=comparison(b, a))
+    assert quarter["values"] == {"n_cashflow_act": 25}
 
 
 @pytest.mark.parametrize("change", ["year", "gap", "currency", "scope", "balance"])

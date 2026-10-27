@@ -14,7 +14,8 @@ def test_inventory_is_metadata_only_and_excludes_generated_outputs_and_symlinks(
     (tmp_path / "old-model.xlsx").write_bytes(b"not read or changed")
     (tmp_path / "research.pdf").write_bytes(b"not read")
     generated = tmp_path / "02_财务数据"; generated.mkdir()
-    (generated / "output.json").write_text("generated")
+    version = generated / "20261027_123456abcdef"; version.mkdir()
+    (version / "output.json").write_text("generated")
     (tmp_path / "alias.xlsx").symlink_to(tmp_path / "old-model.xlsx")
     result = api().scan_company(tmp_path)
     assert sorted(x["relative_path"] for x in result["files"]) == ["old-model.xlsx", "research.pdf"]
@@ -28,3 +29,13 @@ def test_inventory_limit_is_visible_instead_of_claiming_complete_coverage(tmp_pa
     result = api().scan_company(tmp_path, max_files=2)
     assert len(result["files"]) == 2
     assert result["truncated"] is True
+
+
+def test_inventory_retains_preexisting_models_data_notes_and_archives(tmp_path):
+    paths = ["01_公司资料/source.pdf", "02_财务数据/manual.xlsx", "03_财务模型/existing-model.xlsx",
+             "04_研究底稿/old-notes.docx", "05_历史版本/2024/model.xlsx"]
+    for name in paths:
+        file = tmp_path / name; file.parent.mkdir(parents=True, exist_ok=True); file.write_bytes(b"metadata only")
+    result = api().scan_company(tmp_path)
+    assert sorted(x["relative_path"] for x in result["files"]) == sorted(paths)
+    assert result["truncated"] is False

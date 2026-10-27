@@ -17,6 +17,9 @@ STATEMENTS = ("income", "balancesheet", "cashflow")
 _META = {"ts_code", "ann_date", "f_ann_date", "end_date", "report_type", "comp_type", "end_type", "update_flag"}
 _NON_ADDITIVE = {"basic_eps", "diluted_eps", "c_cash_equ_beg_period", "c_cash_equ_end_period",
                  "beg_bal_cash", "end_bal_cash", "beg_bal_cash_equ", "end_bal_cash_equ"}
+_CORE_FIELDS = {"income": (("revenue", "total_revenue"), ("n_income",)),
+                "balancesheet": (("total_assets",), ("total_liab",), ("total_hldr_eqy_inc_min_int",)),
+                "cashflow": (("n_cashflow_act",), ("n_cashflow_inv_act",), ("n_cash_flows_fnc_act",))}
 
 
 def _day(value):
@@ -64,7 +67,7 @@ def normalize_statements(payloads, *, ticker, as_of, currency, annual_years=5, i
         rows = envelope.get("rows") if isinstance(envelope, dict) else envelope
         if not isinstance(rows, list):
             raise ValueError(f"{kind} must contain a list of source rows")
-        selected = {}
+        selected, seen_ranks = {}, {}
         for index, raw in enumerate(rows):
             if not isinstance(raw, dict):
                 raise ValueError("source row must be an object")
@@ -84,9 +87,11 @@ def normalize_statements(payloads, *, ticker, as_of, currency, annual_years=5, i
                 raise ValueError("statement publication precedes its reporting date")
             values = {k: _number(v) for k, v in raw.items() if k not in _META}
             rank = (published, int(str(raw["report_type"]) == "4"), str(raw.get("update_flag", "0")))
-            old = selected.get(end)
-            if old and rank == old[0] and values != old[1]["values"]:
+            identity = (end, rank)
+            if identity in seen_ranks and values != seen_ranks[identity]:
                 raise ValueError(f"conflicting equal-rank {kind} source rows for {end}")
+            seen_ranks[identity] = values
+            old = selected.get(end)
             if old and rank <= old[0]:
                 continue
             units = {k: ("CNY/share" if k in {"basic_eps", "diluted_eps"} else "shares" if k == "total_share" else currency) for k in values}
@@ -113,10 +118,18 @@ def normalize_statements(payloads, *, ticker, as_of, currency, annual_years=5, i
         for kind in STATEMENTS:
             if not any(r["period_end"] == period for r in retained[kind]):
                 missing.append({"period_end": period, "statement": kind})
-    covered = len(annual) == annual_years and len(recent) == interim_periods and not missing and all(retained.values())
+    missing_data = []
+    for kind, rows in retained.items():
+        for record in rows:
+            absent = [" or ".join(group) for group in _CORE_FIELDS[kind]
+                      if all(record["values"].get(field) is None for field in group)]
+            if absent:
+                missing_data.append({"period_end": record["period_end"], "statement": kind, "missing_inputs": absent})
+    covered = (len(annual) == annual_years and len(recent) == interim_periods
+               and not missing and not missing_data and all(retained.values()))
     return {"schema_version": 1, "ticker": ticker, "currency": currency, "as_of": cutoff.isoformat(),
             "statements": retained, "annual_periods": annual, "recent_periods": recent,
-            "missing_statements": missing, "excluded": excluded,
+            "missing_statements": missing, "missing_financial_data": missing_data, "excluded": excluded,
             "status": "ready_for_review" if covered else "incomplete", "human_review": "pending",
             "point_in_time_certified": False,
             "coverage_target": {"annual_years": annual_years, "recent_periods": interim_periods}}
@@ -150,25 +163,42 @@ def reconcile(package, *, tolerance=1.0):
     return results
 
 
-def derive_quarter(current, previous):
-    """Subtract adjacent comparable YTD flow facts; never derive EPS or BS balances."""
+def derive_quarter(current, previous, *, comparability=None):
+    """Subtract adjacent YTD flows only with source-backed revision comparability.
+
+    Dates/report types alone cannot prove a common accounting basis. The caller
+    must supply a source locator and an explicit confirmation tied to both exact
+    revision IDs. No production caller makes this confirmation automatically.
+    """
     current, previous = deepcopy(current), deepcopy(previous)
     end, prior_end = _day(current["period_end"]), _day(previous["period_end"])
     same = ("ticker", "currency", "scope", "report_type", "statement", "period_start")
     if (current["statement"] == "balancesheet" or any(current[k] != previous[k] for k in same)
             or current["period_basis"] != "year_to_date" or previous["period_basis"] != "year_to_date"
             or end.year != prior_end.year or end.month - prior_end.month != 3
+            or (end.month, end.day) not in {(6, 30), (9, 30), (12, 31)}
             or prior_end not in {date(end.year, 3, 31), date(end.year, 6, 30), date(end.year, 9, 30)}):
         raise ValueError("quarter derivation requires adjacent comparable consolidated YTD flows")
+    if _day(previous["published_at"]) > _day(current["published_at"]):
+        raise ValueError("quarter derivation cannot mix a later prior-period revision with an older current report")
+    if (not isinstance(comparability, dict) or comparability.get("basis_confirmed") is not True
+            or comparability.get("current_revision_id") != current["revision_id"]
+            or comparability.get("previous_revision_id") != previous["revision_id"]
+            or not isinstance(comparability.get("source_locator"), str)
+            or not comparability["source_locator"].strip()):
+        raise ValueError("quarter derivation requires source-backed comparability evidence for both revisions")
     values = {}
     for key, value in current["values"].items():
         if key in _NON_ADDITIVE:
             continue
+        if key in previous["values"] and current["units"][key] != previous["units"].get(key):
+            raise ValueError("quarter derivation requires matching units")
         prior = previous["values"].get(key)
         values[key] = None if value is None or prior is None else value - prior
     current.update(values=values, units={k: current["units"][k] for k in values}, value_kind="derived",
                    period_start=(prior_end + timedelta(days=1)).isoformat(), period_basis="single_quarter",
                    derived_from=[previous["revision_id"], current["revision_id"]],
+                   comparability_evidence=deepcopy(comparability),
                    published_at=max(current["published_at"], previous["published_at"]))
     current["revision_id"] = _hash(current)
     return current

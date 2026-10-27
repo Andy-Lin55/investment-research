@@ -38,7 +38,8 @@ def prepare_workpapers(payloads, *, ticker, as_of, currency, company_dir, write=
         raise ValueError("company_dir must be an existing non-symlink directory")
     package = normalize_statements(payloads, ticker=ticker, as_of=as_of, currency=currency)
     package["checks"] = reconcile(package)
-    encoded = json.dumps(package, sort_keys=True, ensure_ascii=False, allow_nan=False).encode()
+    encoded = json.dumps({"normalized": package, "retained_sources": _clean(payloads)},
+                         sort_keys=True, ensure_ascii=False, allow_nan=False).encode()
     version = as_of.replace("-", "") + "_" + hashlib.sha256(encoded).hexdigest()[:12]
     data_relative = Path("02_财务数据") / version
     working_relative = Path("04_研究底稿") / version

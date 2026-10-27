@@ -1,70 +1,60 @@
+from unittest.mock import Mock
+
 import pytest
-from unittest.mock import patch, MagicMock
-from investment_research.notion_sync.sync_manager import SyncManager
+from notion_sync import sync_manager as sync
 
 
-@patch("investment_research.notion_sync.sync_manager.NotionClient")
-def test_get_active_tickers_returns_list(mock_nc_cls):
-    mock_nc = MagicMock()
-    mock_nc_cls.return_value = mock_nc
-    mock_nc.query_database.return_value = [
-        {"properties": {"Ticker": {"rich_text": [{"plain_text": "600519"}]},
-                        "Status": {"select": {"name": "Active"}}}},
-        {"properties": {"Ticker": {"rich_text": [{"plain_text": "000001"}]},
-                        "Status": {"select": {"name": "Active"}}}},
+def page(ticker):
+    return {"properties": {"Ticker": {"rich_text": [{"plain_text": ticker}]}}}
+
+
+@pytest.mark.parametrize("function,statuses", [
+    (sync.get_active_tickers, ["Active"]),
+    (sync.get_daily_tickers, ["Active", "Watch"]),
+    (sync.get_all_tickers, ["Coverage", "Active", "Watch"]),
+])
+def test_universe_selection_keeps_status_contract_and_all_pages(monkeypatch, function, statuses):
+    client = Mock()
+    client.databases.query.side_effect = [
+        {"results": [page("600519.SH")], "has_more": True, "next_cursor": "page2"},
+        {"results": [page("0700.HK"), {"properties": {}}], "has_more": False},
     ]
-    mgr = SyncManager()
-    tickers = mgr.get_active_tickers()
-    assert "600519" in tickers
-    assert "000001" in tickers
-    assert len(tickers) == 2
+    monkeypatch.setattr(sync, "get_client", lambda: client)
+    assert function() == ["600519.SH", "0700.HK"]
+    rule = client.databases.query.call_args_list[0].kwargs["filter"]
+    filters = rule.get("or", [rule])
+    assert [item["select"]["equals"] for item in filters] == statuses
+    assert client.databases.query.call_args.kwargs["start_cursor"] == "page2"
 
 
-@patch("investment_research.notion_sync.sync_manager.NotionClient")
-def test_get_active_tickers_empty(mock_nc_cls):
-    mock_nc = MagicMock()
-    mock_nc_cls.return_value = mock_nc
-    mock_nc.query_database.return_value = []
-    mgr = SyncManager()
-    assert mgr.get_active_tickers() == []
+def test_empty_active_universe_returns_empty_list(monkeypatch):
+    client = Mock()
+    client.databases.query.return_value = {"results": [], "has_more": False}
+    monkeypatch.setattr(sync, "get_client", lambda: client)
+    assert sync.get_active_tickers() == []
 
 
-@patch("investment_research.notion_sync.sync_manager.NotionClient")
-def test_event_exists_true(mock_nc_cls):
-    mock_nc = MagicMock()
-    mock_nc_cls.return_value = mock_nc
-    mock_nc.query_database.return_value = [{"id": "existing-page-id"}]
-    mgr = SyncManager()
-    result = mgr._event_exists("600519", "公告", "2025-01-15")
-    assert result is True
+def test_duplicate_source_is_not_published_again(monkeypatch):
+    client = Mock()
+    client.databases.query.return_value = {"results": [{"id": "old-event"}]}
+    monkeypatch.setattr(sync, "get_client", lambda: client)
+    assert sync.create_event("600519.SH", {"event_type": "公告", "event_date": "2026-10-27",
+                                          "source_url": "https://example.invalid/report.pdf"}) is None
+    client.pages.create.assert_not_called()
 
 
-@patch("investment_research.notion_sync.sync_manager.NotionClient")
-def test_event_exists_false(mock_nc_cls):
-    mock_nc = MagicMock()
-    mock_nc_cls.return_value = mock_nc
-    mock_nc.query_database.return_value = []
-    mgr = SyncManager()
-    result = mgr._event_exists("600519", "公告", "2025-01-15")
-    assert result is False
-
-
-@patch("investment_research.notion_sync.sync_manager.NotionClient")
-def test_create_event_skips_duplicate(mock_nc_cls):
-    mock_nc = MagicMock()
-    mock_nc_cls.return_value = mock_nc
-    # First call (get_ticker_page_id for _event_exists) returns Universe page
-    # Second call (_event_exists) returns existing event
-    mock_nc.query_database.return_value = [{"id": "existing-page-id"}]
-    mgr = SyncManager()
-    result = mgr.create_event("600519", {
-        "event_type": "公告",
-        "event_date": "2025-01-15",
-        "one_line_summary": "test",
-        "importance": "High",
-        "investment_signal": "Buy",
-        "detailed_analysis": "",
-        "key_numbers": {},
+def test_new_event_preserves_numbers_and_original_source(monkeypatch):
+    client = Mock()
+    client.databases.query.return_value = {"results": []}
+    client.pages.create.return_value = {"id": "new-event"}
+    monkeypatch.setattr(sync, "get_client", lambda: client)
+    result = sync.create_event("600519.SH", {
+        "event_type": "季度报告", "event_date": "2026-10-27", "importance": "Medium",
+        "one_line_summary": "收入100，现金流20", "key_numbers": {"收入": 100},
+        "source_url": "https://example.invalid/report.pdf",
     })
-    assert result is False
-    mock_nc.create_page.assert_not_called()
+    assert result == "new-event"
+    properties = client.pages.create.call_args.kwargs["properties"]
+    assert properties["SourceURL"]["url"] == "https://example.invalid/report.pdf"
+    assert "100" in str(properties["KeyNumbers"])
+    assert properties["EventDate"]["date"]["start"] == "2026-10-27"

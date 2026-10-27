@@ -1,43 +1,42 @@
+from datetime import datetime, timezone
+from unittest.mock import Mock
+
 import pytest
-from unittest.mock import patch, MagicMock
-from investment_research.data_ingestion.cninfo_fetcher import (
-    filter_announcements_by_keyword,
-    build_request_params,
-)
+from data_ingestion import cninfo_fetcher as source
 
 
-def test_filter_announcements_by_keyword():
-    announcements = [
-        {"announcementTitle": "2024年业绩预告"},
-        {"announcementTitle": "关于公司日常经营情况的说明"},
-        {"announcementTitle": "重大合同签订公告"},
-        {"announcementTitle": "股东大会决议公告"},
+@pytest.mark.parametrize("ticker", ["0700.HK", "AAPL", "BRK.B"])
+def test_non_a_shares_do_not_query_cninfo(ticker):
+    assert source.fetch_announcements(ticker) == []
+
+
+def test_fetch_matches_exact_company_and_deduplicates_keyword_hits(monkeypatch):
+    rows = [
+        {"announcementId": "report1", "secCode": "600519", "announcementTitle": "年度报告",
+         "announcementTime": 1793030400000, "adjunctUrl": "finalpage/report.pdf"},
+        {"announcementId": "other", "secCode": "000001", "announcementTitle": "年度报告"},
     ]
-    keywords = ["业绩预告", "重大合同"]
-    result = filter_announcements_by_keyword(announcements, keywords)
-    assert len(result) == 2
-    assert result[0]["announcementTitle"] == "2024年业绩预告"
-    assert result[1]["announcementTitle"] == "重大合同签订公告"
+    response = Mock()
+    response.json.return_value = {"announcements": rows}
+    post = Mock(return_value=response)
+    monkeypatch.setattr(source.requests, "post", post)
+    monkeypatch.setattr(source.time, "sleep", lambda _: None)
+    result = source.fetch_announcements("600519.SH", download_pdf=False, keywords=["年度报告", "业绩"])
+    assert len(result) == 1
+    assert result[0]["ticker"] == "600519.SH"
+    assert result[0]["url"] == "http://static.cninfo.com.cn/finalpage/report.pdf"
+    assert result[0]["pdf_path"] is None
+    assert post.call_args.kwargs["data"]["searchkey"] == "600519 业绩"
 
 
-def test_filter_announcements_empty():
-    assert filter_announcements_by_keyword([], ["业绩预告"]) == []
+def test_timestamp_uses_beijing_calendar_day():
+    milliseconds = int(datetime(2026, 10, 26, 17, tzinfo=timezone.utc).timestamp() * 1000)
+    assert source._ts_to_date(milliseconds) == "2026-10-27"
+    assert source._ts_to_date("invalid") == ""
 
 
-def test_filter_announcements_no_match():
-    announcements = [{"announcementTitle": "普通公告"}]
-    assert filter_announcements_by_keyword(announcements, ["业绩预告"]) == []
-
-
-def test_build_request_params_basic():
-    params = build_request_params("600519")
-    assert params["stock"] == "600519"
-    assert "pageNum" in params
-    assert params["pageSize"] == 30
-
-
-def test_build_request_params_custom():
-    params = build_request_params("000001", page_num=2, page_size=10)
-    assert params["stock"] == "000001"
-    assert params["pageNum"] == 2
-    assert params["pageSize"] == 10
+def test_pdf_cache_does_not_redownload_existing_file(tmp_path):
+    path = tmp_path / "original.pdf"
+    path.write_bytes(b"existing-source")
+    assert source._download_pdf("https://example.invalid/report.pdf", path)
+    assert path.read_bytes() == b"existing-source"

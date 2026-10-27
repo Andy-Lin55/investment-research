@@ -13,6 +13,7 @@ data_ingestion/tushare_fetcher.py
 from __future__ import annotations
 
 import contextlib
+import math
 from datetime import date, timedelta
 from typing import Optional
 
@@ -162,21 +163,29 @@ def _fetch_hk_stock(ticker: str) -> dict:
             df = ak.stock_hk_financial_indicator_em(symbol=code)
         if df is None or df.empty:
             logger.warning(f"港股 EM 财务指标无数据 [{ticker}]")
-            return result
-        row = df.iloc[0]
-        for src_col, dst_key in [
-            ("市盈率",               "pe_ttm"),
-            ("市净率",               "pb"),
-            ("股东权益回报率(%)",     "roe"),
-            ("营业总收入滚动环比增长(%)", "revenue_growth"),
-            ("净利润滚动环比增长(%)",    "net_profit_growth"),
-            ("股息率TTM(%)",          "dividend_yield"),
-        ]:
-            v = _safe_float(row.get(src_col))
-            if v is not None:
-                result[dst_key] = round(v, 4)
+        else:
+            row = df.iloc[0]
+            for src_col, dst_key in [
+                ("市盈率",               "pe_ttm"),
+                ("市净率",               "pb"),
+                ("股东权益回报率(%)",     "roe"),
+                ("营业总收入滚动环比增长(%)", "revenue_growth"),
+                ("净利润滚动环比增长(%)",    "net_profit_growth"),
+                ("股息率TTM(%)",          "dividend_yield"),
+            ]:
+                v = _safe_float(row.get(src_col))
+                if v is not None:
+                    result[dst_key] = round(v, 4)
     except Exception as e:
         logger.warning(f"港股财务指标失败 [{ticker}]: {e}")
+
+    direct_yield = result.get("dividend_yield")
+    if direct_yield is None or not math.isfinite(direct_yield) or direct_yield < 0:
+        from data_ingestion.dividend_yield import calculate_hk_dividend_yield
+        result.pop("dividend_yield", None)
+        calculated = calculate_hk_dividend_yield(ticker)
+        if "dividend_yield" in calculated:
+            result["dividend_yield"] = calculated["dividend_yield"]
 
     return result
 

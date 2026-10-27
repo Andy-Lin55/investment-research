@@ -2,8 +2,8 @@ name: Daily Pipeline
 
 on:
   schedule:
-    # UTC 23:30 = 北京 07:30（次日），工作日运行
-    - cron: '30 23 * * 0-4'
+    # UTC 21:00 = 北京 05:00（次日），工作日运行；预留定时触发延迟
+    - cron: '0 21 * * 0-4'
   workflow_dispatch:
 
 # 公共环境变量，所有 job 共享

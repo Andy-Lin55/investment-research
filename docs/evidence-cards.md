@@ -6,7 +6,7 @@ Main categories: `trading_flows`, `fundamentals` (including prices and valuation
 
 `facts`, `calculations` and `interpretations` are separate fields. `human_review` always starts `pending`; `automatic_validation=structure_only` is not financial fact-checking. Earnings types and explicitly material disclosures flag research as required even if importance is Low or content is missing. These flags do not constitute a durable queue: that integration is a later phase.
 
-Plan/completion/draft stages are hints from the supplied announcement title or explicit metadata. They need source review. No inflow, net buying, policy exposure or investment recommendation is inferred from an event label.
+Plan/draft stages may be conservative hints from supplied announcement titles. Executed status requires explicit source metadata; completion words in titles are insufficient because they may be negated or conditional. All stages need source review. No inflow, net buying, policy exposure or investment recommendation is inferred from an event label.
 
 Event identity is issuer plus source locator/document ID. Ingestion time is excluded. A revision is based on source text, so altered/replaced source material retains event identity but gets another revision. Source locators must identify the document, not a generic site homepage. An amended document issued under a new URL should supply the same canonical `document_id` if that identity has been established. Do not guess it.
 

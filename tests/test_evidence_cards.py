@@ -130,6 +130,25 @@ def test_no_policy_company_impact_is_invented():
     assert card["required_research"] is False
 
 
+@pytest.mark.parametrize("kind,title", [
+    ("减持", "关于股东减持计划尚未实施完毕的公告"),
+    ("回购", "关于股份回购计划未完成的公告"),
+    ("减持", "股东减持计划完成前的进展"),
+    ("回购", "关于回购计划终止的公告"),
+])
+def test_negated_or_ambiguous_completion_never_becomes_executed(kind, title):
+    assert api().build_card(payload(document_type=kind, title=title))["event_stage"] == "unknown"
+
+
+@pytest.mark.parametrize("kind", ["中期报告", "业绩公告", "10-K/A", "10-Q/A", "20-F/A"])
+def test_existing_hk_earnings_and_amendments_require_research(kind):
+    card = api().build_card(payload(document_type=kind, importance="Low", content=""))
+    assert card["category"] == "fundamentals"
+    assert card["subtype"] == "earnings"
+    assert card["required_research"] is True
+    assert card["research_status"] == "pending_evidence"
+
+
 def test_preview_prints_valid_card_without_persisting(monkeypatch, capsys):
     try:
         preview = importlib.import_module("research.preview")

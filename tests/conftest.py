@@ -5,6 +5,7 @@ import subprocess
 
 import dotenv
 import pytest
+import requests
 
 _guard = pytest.MonkeyPatch()
 _attempts = []
@@ -38,6 +39,9 @@ def pytest_configure(config):
     _guard.setattr(socket.socket, "connect", _deny_external)
     _guard.setattr(socket.socket, "connect_ex", _deny_external)
     _guard.setattr(socket, "create_connection", _deny_external)
+    for name in ("getaddrinfo", "gethostbyname", "gethostbyname_ex", "gethostbyaddr"):
+        _guard.setattr(socket, name, _deny_external)
+    _guard.setattr(requests.Session, "request", _deny_external)
     _guard.setattr(smtplib.SMTP, "connect", _deny_external)
     _guard.setattr(subprocess, "Popen", _deny_external)
 
@@ -51,7 +55,16 @@ def pytest_collection_finish(session):
         raise pytest.UsageError("Test imports attempted external access during collection")
 
 
+@pytest.hookimpl(wrapper=True, tryfirst=True)
 def pytest_runtest_teardown(item, nextitem):
+    result = yield
     if _attempts:
         _attempts.clear()
         pytest.fail("External access was attempted, even if application code caught the offline guard")
+    return result
+
+
+def pytest_sessionfinish(session, exitstatus):
+    if _attempts:
+        _attempts.clear()
+        session.exitstatus = pytest.ExitCode.TESTS_FAILED

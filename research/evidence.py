@@ -20,8 +20,9 @@ TAXONOMY = {
 }
 _DOCUMENT_TYPES = {
     **{name: ("fundamentals", "earnings") for name in (
-        "季度报告", "年度报告", "半年度报告", "第一季度报告", "第三季度报告",
-        "业绩预告", "业绩快报", "业绩预告修正", "10-K", "10-Q", "20-F",
+        "季度报告", "年度报告", "半年度报告", "中期报告", "第一季度报告", "第三季度报告",
+        "业绩公告", "业绩预告", "业绩快报", "业绩预告修正", "10-K", "10-Q", "20-F",
+        "10-K/A", "10-Q/A", "20-F/A",
     )},
     "行情": ("fundamentals", "price_valuation"),
     "估值": ("fundamentals", "price_valuation"),
@@ -121,10 +122,10 @@ def build_card(payload: dict) -> dict:
     if stage not in {"unknown", "planned", "executed", "draft"}:
         raise ValueError("unsupported event_stage")
     if stage == "unknown" and category == "trading_flows" and subtype in {"ownership", "buyback"}:
-        if "计划" in title and not any(word in title for word in ("实施完毕", "完成", "终止")):
+        # Completion words can be negated or refer to future conditions. Only
+        # explicit source metadata may mark an event executed, never title text.
+        if "计划" in title and not any(word in title for word in ("未", "完毕", "完成", "终止", "取消")):
             stage = "planned"
-        elif any(word in title for word in ("实施完毕", "完成")):
-            stage = "executed"
     if stage == "unknown" and category == "policy" and "征求意见" in title:
         stage = "draft"
     material = data.get("is_material", False)

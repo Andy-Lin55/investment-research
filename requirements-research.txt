@@ -1,3 +1,4 @@
 # Optional opt-in research runner; existing production requirements unchanged.
 openpyxl>=3.1,<4
 PyNaCl>=1.5,<2
+XlsxWriter>=3.2,<4

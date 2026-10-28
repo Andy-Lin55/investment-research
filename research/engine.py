@@ -49,8 +49,17 @@ def process(task_id,*,store,drive,reports,providers,budget,day,model=None):
     version=root+'/04_研究底稿/'+task_id+'/'+fingerprint
     if model is not None and 'model' not in task['checkpoints']:
         try:
-            task['checkpoints']['model']=drive.put_immutable(root+'/03_财务模型/候选/'+model['model_version']+'.json',encoded(model))
+            ref=drive.put_immutable(root+'/03_财务模型/候选/'+model['model_version']+'.json',encoded(model))
+            if ref.get('verified') is not True:raise ValueError('model upload not verified')
+            task['checkpoints']['model']=ref
             store.put(task)
+        except Exception as error:return state('retry_delivery',error)
+    if model is not None and 'model_workbook' not in task['checkpoints']:
+        try:
+            from financials.workbook import export_model
+            ref=drive.put_immutable(root+'/03_财务模型/候选/'+model['model_version']+'.xlsx',export_model(model))
+            if ref.get('verified') is not True:raise ValueError('model workbook not verified')
+            task['checkpoints']['model_workbook']=ref;store.put(task)
         except Exception as error:return state('retry_delivery',error)
     if 'source' not in task['checkpoints']:
         try:

@@ -99,3 +99,26 @@ def test_incompatible_supplied_model_is_rejected_before_api():
 def test_received_response_updates_attempt_state_before_cost_settlement():
     parts=setup();r=run(parts)
     assert r['attempts'][0]['status']=='response_received'
+
+
+def test_workbook_upload_is_verified_checkpoint_and_retry_reuses_analysis():
+    from financials.forecast import project
+    from tests.test_forecast_model import baseline,scenarios
+    m,s,t,d,r,p=setup();r.fail=False
+    model=project(baseline(),scenarios(),as_of='2026-10-27')
+    model['baseline']['issuer_id']=t['issuer_id']
+    model=project(model['baseline'],model['assumptions'],as_of=model['as_of'])
+    put=d.put_immutable;failed=[False]
+    def interrupted(path,data):
+        if path.endswith('.xlsx') and not failed[0]:
+            failed[0]=True;raise RuntimeError('workbook upload failed')
+        return put(path,data)
+    d.put_immutable=interrupted
+    out=m.process(t['task_id'],store=s,drive=d,reports=r,providers=[p],budget=Budget(s),day='2026-10-27',model=model)
+    assert out['status']=='retry_delivery';assert p.calls==0
+    out=m.process(t['task_id'],store=s,drive=d,reports=r,providers=[p],budget=Budget(s),day='2026-10-27',model=model)
+    assert out['checkpoints']['model_workbook']['verified'] is True
+    assert out['checkpoints']['model_workbook']['path'].endswith('.xlsx')
+    assert p.calls==1
+    from research.delivery import render_report
+    assert 'model_workbook' in render_report(out,out['analysis'],out['checkpoints'])

@@ -1,0 +1,83 @@
+"""Catch formula/cached-value divergence, missing-input fabrication and unsafe edits."""
+from copy import deepcopy
+from io import BytesIO
+import importlib
+import pytest
+from openpyxl import load_workbook
+from financials.forecast import project
+from tests.test_forecast_model import baseline, scenarios
+
+
+def api():
+    try:return importlib.import_module('financials.workbook')
+    except ModuleNotFoundError:pytest.fail('Reviewable forecast workbook is not implemented')
+
+
+def fixture():return project(baseline(),scenarios(),as_of='2026-10-27')
+
+
+def test_workbook_has_linked_statements_and_independently_checked_results():
+    data=api().export_model(fixture())
+    formulas=load_workbook(BytesIO(data));values=load_workbook(BytesIO(data),data_only=True)
+    assert formulas.sheetnames==['Review','Baseline','Assumptions','Base','Bull','Bear','Changes']
+    assert formulas['Base']['C5'].value=='=B5*(1+Assumptions!D2)'
+    assert values['Base']['C5'].value==1100
+    assert values['Base']['C12'].value==217.5
+    assert values['Base']['C25'].value==452.25
+    assert values['Base']['C44'].value==pytest.approx(26.1)
+    assert values['Base']['C38'].value==pytest.approx(0,abs=1e-8)
+    assert values['Base']['C39'].value==pytest.approx(0,abs=1e-8)
+    assert formulas['Assumptions']['E2'].value=='explicit synthetic assumption'
+    assert api().export_model(fixture())==data
+
+
+def test_later_year_links_prior_balance_and_does_not_reuse_opening_cash():
+    s=scenarios()
+    for rows in s.values():rows.append(dict(deepcopy(rows[0]),year=2027))
+    m=project(baseline(),s,as_of='2026-10-27');w=load_workbook(BytesIO(api().export_model(m)))
+    assert w['Base']['D5'].value.startswith('=C5*')
+    assert w['Base']['D17'].value.startswith('=C17+')
+    cached=load_workbook(BytesIO(api().export_model(m)),data_only=True)
+    assert cached['Base']['D5'].value==pytest.approx(1210)
+    assert cached['Base']['D38'].value==pytest.approx(0,abs=1e-8)
+
+
+def test_missing_assumption_produces_editable_blank_without_valuation():
+    s=scenarios();s['base'][0]['values']['growth']=None
+    m=project(baseline(),s,as_of='2026-10-27');w=load_workbook(BytesIO(api().export_model(m)))
+    assert w['Assumptions']['D2'].value is None
+    assert w['Base']['C44'].value is None
+    assert 'pending_assumptions' in w['Review']['B4'].value
+
+
+def test_only_explicit_human_assumption_edits_can_be_imported():
+    m=fixture();w=load_workbook(BytesIO(api().export_model(m)))
+    w['Assumptions']['D2']=.2;w['Assumptions']['E2']='Human reviewed growth, 2026-10-28'
+    raw=BytesIO();w.save(raw)
+    out=api().import_assumptions(raw.getvalue(),m)
+    assert out['scenarios']['base'][0]['income']['revenue']==1200
+    assert out['model_version']!=m['model_version']
+    assert out['human_review']=='pending'
+    assert out['assumption_changes'][0]['previous']==.1
+    assert m['assumptions']['base'][0]['values']['growth']==.1
+
+
+@pytest.mark.parametrize('change',['formula','baseline','identity','source_formula','duplicate','blank_source'])
+def test_import_rejects_modified_baseline_stale_identity_or_untrusted_cells(change):
+    m=fixture();w=load_workbook(BytesIO(api().export_model(m)))
+    if change=='formula':w['Assumptions']['D2']='=1+1'
+    if change=='baseline':w['Baseline']['B2']=9
+    if change=='identity':w['Review']['B3']='stale-model'
+    if change=='source_formula':w['Assumptions']['E2']='=HYPERLINK("https://evil.invalid")'
+    if change=='duplicate':w['Assumptions'].append(['base',2026,'growth',.2,'human'])
+    if change=='blank_source':w['Assumptions']['E2']=''
+    raw=BytesIO();w.save(raw)
+    with pytest.raises(ValueError):api().import_assumptions(raw.getvalue(),m)
+
+
+def test_source_strings_never_become_formulas_or_clickable_remote_links():
+    b=baseline();b['source_locator']='=HYPERLINK("https://evil.invalid")'
+    m=project(b,scenarios(),as_of='2026-10-27')
+    w=load_workbook(BytesIO(api().export_model(m)))
+    assert w['Baseline']['C2'].data_type=='s'
+    assert w['Baseline']['C2'].hyperlink is None

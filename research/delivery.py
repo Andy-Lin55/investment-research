@@ -237,7 +237,7 @@ def render_report(task,result,files):
                 lines.append(f'{name} / {row["year"]}：收入 {row["income"]["revenue"]:,.2f}；归母净利 {row["income"]["parent_net_income"]:,.2f}；'
                     f'期末现金 {row["balance"]["cash"]:,.2f}；债务 {row["balance"]["debt"]:,.2f}；估值 {row["valuation"]["price"]}；资金缺口 {row["funding_shortfall"]:,.2f}')
         if model.get('assumption_changes'):lines.append('本次变化的假设：'+', '.join(x['field'] for x in model['assumption_changes']))
-    stable_files={k:v for k,v in files.items() if k in {'source','result','model'}}
+    stable_files={k:v for k,v in files.items() if k in {'source','result','model','model_workbook'}}
     lines.extend(['未解决问题：'+'；'.join(r['open_questions']),'证据与底稿：',
                   '\n'.join(k+'：'+str(v.get('url') or v.get('path')) for k,v in stable_files.items()),
                   '事实来源：'+task['card']['source']['url'],'人工状态：'+task['human_review'],

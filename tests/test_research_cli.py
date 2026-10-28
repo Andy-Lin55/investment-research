@@ -29,4 +29,5 @@ def test_schema_setup_is_explicit_and_separate_from_existing_report_database():
     r=api().setup_notion(http,'parent')
     assert r['workspace_url']=='https://notion.invalid/pilot'
     assert r['tasks_source']!=r['reports_source']
+    assert r['followups_source'] not in {r['tasks_source'],r['reports_source']}
     assert all(not (c[0]=='PATCH') for c in calls)

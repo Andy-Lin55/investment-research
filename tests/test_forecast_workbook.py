@@ -2,6 +2,7 @@
 from copy import deepcopy
 from io import BytesIO
 import importlib
+import re
 import pytest
 from openpyxl import load_workbook
 from financials.forecast import project
@@ -81,3 +82,35 @@ def test_source_strings_never_become_formulas_or_clickable_remote_links():
     w=load_workbook(BytesIO(api().export_model(m)))
     assert w['Baseline']['C2'].data_type=='s'
     assert w['Baseline']['C2'].hyperlink is None
+
+
+def test_every_statement_formula_matches_cache_across_distinct_cases_and_years():
+    from openpyxl.utils.cell import range_boundaries,get_column_letter
+    s=scenarios()
+    for name,growth in [('base',.1),('bull',.3),('bear',-.2)]:
+        s[name][0]['values']['growth']=growth
+        s[name].append(dict(deepcopy(s[name][0]),year=2027))
+    data=api().export_model(project(baseline(),s,as_of='2026-10-27'))
+    formulas=load_workbook(BytesIO(data));cached=load_workbook(BytesIO(data),data_only=True)
+    memo={}
+    def value(sheet,cell):
+        key=(sheet,cell)
+        if key in memo:return memo[key]
+        raw=formulas[sheet][cell].value
+        if not isinstance(raw,str) or not raw.startswith('='):return raw
+        def substitute(match):
+            tab=match[1] or sheet
+            if ':' in match[2]:
+                c1,r1,c2,r2=range_boundaries(match[2])
+                return repr([value(tab,f'{get_column_letter(c)}{r}') for r in range(r1,r2+1) for c in range(c1,c2+1)])
+            return repr(value(tab,match[2]))
+        expression=re.sub(r'(?:(\w+)!)?([A-Z]+[0-9]+(?::[A-Z]+[0-9]+)?)',substitute,raw[1:])
+        result=eval(expression,{'__builtins__':{}},{'SUM':sum,'MAX':max,'IF':lambda c,a,b:a if c else b})
+        memo[key]=result;return result
+    for tab in ('Base','Bull','Bear'):
+        for row in formulas[tab]:
+            for cell in row:
+                if cell.data_type=='f':
+                    assert value(tab,cell.coordinate)==pytest.approx(cached[tab][cell.coordinate].value)
+    assert cached['Bull']['D5'].value==pytest.approx(1690)
+    assert cached['Bear']['D5'].value==pytest.approx(640)

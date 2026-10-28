@@ -20,3 +20,5 @@ Formula references across multiple years and scenarios, missing-input behavior, 
 
 - Start: clean isolated branch; existing base has 303 passing tests and unmerged draft PRs. No live production mutation authorized by this plan.
 - Task 1: complete — 11 workbook contracts and one delivery-recovery contract observed RED, then GREEN; full offline suite 315 passed (existing SWIG deprecation warnings). Workbooks and model JSON require verified upload receipts. No production file changed; native Excel acceptance is not claimed.
+- Task 1 supplement: private CLI export/import RED→GREEN; formula/cache agreement checked independently for every statement formula across distinct cases and multiple years. A reproduced comparison-history collision now stores each immutable snapshot under its own content digest.
+- Task 2: complete — follow-up creation/reconciliation, manual state preservation, issuer scope, context carry-forward and weekly due priority contracts RED→GREEN. Full offline suite 327 passed. Current-task follow-ups are excluded from its own input fingerprint. Live combined acceptance and final independent review remain pending.

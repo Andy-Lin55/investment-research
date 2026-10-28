@@ -122,3 +122,20 @@ def test_workbook_upload_is_verified_checkpoint_and_retry_reuses_analysis():
     assert p.calls==1
     from research.delivery import render_report
     assert 'model_workbook' in render_report(out,out['analysis'],out['checkpoints'])
+
+
+def test_same_forecast_with_different_comparison_history_keeps_both_workpapers():
+    from financials.forecast import project
+    from tests.test_forecast_model import baseline,scenarios
+    m,s,t,d,r,p=setup();r.fail=False
+    current=project(baseline(),scenarios(),as_of='2026-10-27')
+    old_inputs=scenarios();old_inputs['base'][0]['values']['growth']=.2
+    previous=project(baseline(),old_inputs,as_of='2026-10-27')
+    compared=project(baseline(),scenarios(),as_of='2026-10-27',previous=previous)
+    assert compared['model_version']==current['model_version']
+    first=m.process(t['task_id'],store=s,drive=d,reports=r,providers=[p],budget=Budget(s),day='2026-10-27',model=current)
+    e=event();e['content']+=' Revised source';t2=enqueue(s,e,holding());p.rid=t2['card']['revision_id']
+    second=m.process(t2['task_id'],store=s,drive=d,reports=r,providers=[p],budget=Budget(s),day='2026-10-27',model=compared)
+    assert second['status']=='pending_model'
+    assert first['checkpoints']['model']['path']!=second['checkpoints']['model']['path']
+    assert first['checkpoints']['model_workbook']['path']!=second['checkpoints']['model_workbook']['path']

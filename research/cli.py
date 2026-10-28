@@ -16,6 +16,7 @@ STATES=('pending','pending_evidence','retry_delivery','retry_provider','budget_b
         'provider_attempts_exhausted','pending_report_confirmation','waiting_subscription','candidate_ready',
         'superseded_source_resolved','evidence_only','pending_context','pending_model_provenance',
         'pending_budget_reconciliation','pending_attempt_confirmation','pending_model_refresh','retry_release','published')
+STATES=STATES+('pending_followup_confirmation',)
 
 
 def pages(http,source,body=None):
@@ -73,7 +74,9 @@ def setup_notion(http,parent):
              'Analyst':{'rich_text':{}},'Broker':{'rich_text':{}}}
     children=http('GET',f'/blocks/{workspace["id"]}/children?page_size=100')['results']
     result={'workspace_url':workspace.get('url'),'workspace_id':workspace['id']}
-    for name,schema,key in [('研究任务与信息卡片',tasks,'tasks_source'),('研究报告候选',reports,'reports_source')]:
+    from research.followups import SCHEMA
+    for name,schema,key in [('研究任务与信息卡片',tasks,'tasks_source'),('研究报告候选',reports,'reports_source'),
+                            ('关注事项与行动条件',SCHEMA,'followups_source')]:
         existing=[c for c in children if c.get('type')=='child_database' and c['child_database']['title']==name]
         if len(existing)>1:raise ValueError('duplicate pilot database')
         db=http('GET','/databases/'+existing[0]['id']) if existing else http('POST','/databases',body={
@@ -184,13 +187,14 @@ def scan(roster,store,drive,*,start,end):
     return counts
 
 
-def weekly(roster,store,*,day,slots):
+def weekly(roster,store,*,day,slots,followups=None):
     history=store.list();holdings=[]
+    due=followups.due_issuers(day) if followups is not None else set()
     for h in roster['holdings']:
         rows=[r for r in history if r['issuer_id']==h['issuer_id']]
         last=max([r.get('week','') or '' for r in rows if r['kind']=='weekly_deep' and r['status']=='completed'],default='')
         holdings.append(dict(h,changed=any(r['kind']=='mandatory_event' and r['status'] not in {'completed','superseded_source_resolved'} for r in rows),
-                             due_questions=bool(h.get('next_review_date') and h['next_review_date']<=day),last_review=last))
+                             due_questions=h['issuer_id'] in due or bool(h.get('next_review_date') and h['next_review_date']<=day),last_review=last))
     plan=weekly_plan(holdings,as_of=day,deep_slots=slots)
     now=datetime.now(timezone.utc).isoformat()
     for h in holdings:
@@ -204,7 +208,7 @@ def weekly(roster,store,*,day,slots):
 
 
 def select_tasks(tasks,active_issuers,*,limit,day):
-    runnable={'pending','retry_delivery','retry_provider','waiting_subscription'}
+    runnable={'pending','retry_delivery','retry_provider','waiting_subscription','pending_followup_confirmation'}
     selected=[]
     for task in tasks:
         if task['issuer_id'] not in active_issuers or task['status'] in {'retry_release','published','completed','superseded_source_resolved','evidence_only'}:continue
@@ -253,9 +257,13 @@ def main(argv=None):
             print(json.dumps({'workspace_url':result['workspace_url'],'configured':True}));return 0
         if args.limit<1 or args.slots<0:raise ValueError('invalid work bounds')
         store=NotionTaskStore(http,env['RESEARCH_NOTION_TASKS_SOURCE_ID'])
+        followups=None
+        if args.mode in {'weekly','worker'}:
+            from research.followups import NotionFollowups
+            followups=NotionFollowups(http,env['RESEARCH_NOTION_FOLLOWUPS_SOURCE_ID'])
         reg=registry(env);roster=active_roster(http,env,reg)
         day=datetime.now(timezone(timedelta(hours=8))).date().isoformat()
-        if args.mode=='weekly':result=weekly(roster,store,day=day,slots=args.slots)
+        if args.mode=='weekly':result=weekly(roster,store,day=day,slots=args.slots,followups=followups)
         else:
             drive=graph_drive(env)
             store.content_loader=lambda ref:drive.read(ref['path'])[0]
@@ -277,9 +285,9 @@ def main(argv=None):
                 for task in tasks:
                     task['last_attempted_at']=datetime.now(timezone.utc).isoformat()
                     task['retry_requested']=False;store.put(task)
-                    model=prepare_task_context(task,store,drive,http,mapped[task['issuer_id']])
+                    model=prepare_task_context(task,store,drive,http,mapped[task['issuer_id']],followups=followups)
                     outcome=process(task['task_id'],store=store,drive=drive,reports=reports,providers=providers,
-                                    budget=Budget(store),day=day,model=model)
+                                    budget=Budget(store),day=day,model=model,followups=followups)
                     result[outcome['status']]=result.get(outcome['status'],0)+1
         print(json.dumps(result))
         blocked=any(v for k,v in result.items() if k not in {'completed','waiting_subscription','candidates','reused_candidates','screened','deep','deferred','scanned','queued','feed_cards'})

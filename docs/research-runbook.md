@@ -15,6 +15,10 @@ Status: development candidate, default off. Existing daily briefing and weekly s
 
 ## Setup and first authorization
 
+The GitHub research workflow uses dedicated `RESEARCH_NOTION_TOKEN`, `RESEARCH_DMXAPI_KEY`, `RESEARCH_GEMINI_API_KEY` and `RESEARCH_SEC_USER_AGENT` secrets, mapped to the existing runtime environment names. Provision these separately in `research-pilot`; they never fall back to the old pipeline's `NOTION_TOKEN`/`DMXAPI_KEY`/`GEMINI_API_KEY`. No credentials have been copied or migrated by this workflow change. Dedicated research access, destination verification and explicit enablement remain required before cloud activation. Existing daily/weekly jobs keep their current secrets and schedules.
+
+Offline isolation tests pin the approved daily/weekly workflow bytes and forbid legacy production credential references in the pilot or secret references in PR regression CI. An intentional change to the old workflows needs its own reviewed production update and baseline refresh.
+
 1. Install `requirements.txt` and `requirements-research.txt` in an isolated Python environment. Copy `.research.env.example` to ignored `.research.env`, owner-only permissions; fill existing Notion/provider values privately. Do not send secrets in chat or put private sources in GitHub.
 2. `python -m research.cli notion-setup --write --parent PAGE_ID --output PRIVATE_CONFIG_JSON` creates a separate pilot workspace with tasks and candidate reports. It does not edit existing Universe/Events/Research schemas. Set the returned source IDs in private configuration. Production report destination is connected only after pilot acceptance.
 3. Register your Graph public-client application for personal Microsoft accounts at [Microsoft Entra](https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade). Enable public-client/device flow. Delegated scopes are `Files.ReadWrite`, `User.Read`, `offline_access`. This route needs no client secret. This is the application's own registration, not reuse of desktop sync credentials. See [Microsoft's device flow](https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-device-code).

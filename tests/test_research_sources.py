@@ -54,3 +54,23 @@ def test_material_classification_is_rules_based_and_not_ai_filtered():
 
 def test_non_official_download_hosts_are_rejected_before_request():
     with pytest.raises(ValueError):api().download_primary('https://127.0.0.1/secret')
+
+
+@pytest.mark.parametrize('listing,symbol',[('QFIN.O','QFIN'),('SPG.N','SPG'),('BRK.B','BRK-B')])
+def test_sec_resolves_venue_suffixes_and_class_shares_without_changing_listing(listing,symbol,monkeypatch):
+    monkeypatch.setenv('SEC_USER_AGENT','Research owner@example.org')
+    def request(method,url,**kw):
+        if url.endswith('company_tickers.json'):return {'0':dict(cik_str=123,ticker=symbol)}
+        assert url.endswith('CIK0000000123.json')
+        return {'filings':{'recent':dict(filingDate=['2026-10-27'],form=['10-Q'],accessionNumber=['000123-26-001'],primaryDocument=['q.htm'])}}
+    rows=api().sec(listing,'2026-10-01','2026-10-28',request)
+    assert rows[0]['title'].startswith(listing+' ')
+    assert '/123/' in rows[0]['url']
+
+
+def test_sec_aliases_that_match_different_issuers_remain_unresolved(monkeypatch):
+    monkeypatch.setenv('SEC_USER_AGENT','Research owner@example.org')
+    def request(method,url,**kw):
+        assert url.endswith('company_tickers.json')
+        return {'0':dict(cik_str=123,ticker='BRK.B'),'1':dict(cik_str=456,ticker='BRK-B')}
+    with pytest.raises(api().CoverageError):api().sec('BRK.B','2026-10-01','2026-10-28',request)

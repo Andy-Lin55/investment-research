@@ -66,9 +66,12 @@ def sec(ticker,start,end,request=public_json):
     if 'example.invalid' in os.getenv('SEC_USER_AGENT','example.invalid'):
         raise CoverageError('Configure a real SEC contact User-Agent before collection')
     mapping=request('GET','https://www.sec.gov/files/company_tickers.json')
-    matches=[str(v['cik_str']).zfill(10) for v in mapping.values() if v['ticker'].upper()==ticker.upper()]
+    # Lookup spelling only: preserve the original portfolio listing everywhere else.
+    symbol=ticker.upper();base=re.sub(r'\.(?:O|N)$','',symbol)
+    aliases={symbol,base,base.replace('.','-')}
+    matches={str(v['cik_str']).zfill(10) for v in mapping.values() if v['ticker'].upper() in aliases}
     if len(matches)!=1:raise CoverageError('SEC issuer not resolved uniquely')
-    cik=matches[0];data=request('GET',f'https://data.sec.gov/submissions/CIK{cik}.json')
+    cik=next(iter(matches));data=request('GET',f'https://data.sec.gov/submissions/CIK{cik}.json')
     filings=data['filings'];batches=[filings['recent']]
     for old in filings.get('files',[]):
         if old['filingTo']>=start and old['filingFrom']<=end:

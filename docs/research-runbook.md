@@ -22,6 +22,12 @@ Status: development candidate, default off. Existing daily briefing and weekly s
 5. For cloud refresh-token rotation, provision a fine-grained GitHub token restricted to this repository and Actions secrets write as `RESEARCH_GITHUB_TOKEN`. Refresh tokens stay in `ONEDRIVE_REFRESH_TOKEN`; do not store them in Notion/OneDrive. The token writer is restricted to that one secret. Keep repository/environment credentials separate from PR regressions.
 6. Confirm actual DMXAPI account/group input/output prices in CNY per million tokens. Configure both prices; rates and reported usage determine project costs. Failed/uncertain calls retain their reservation. Unknown models/usage, rate overruns, or exhausted budgets stay blocked. Existing public price endpoint access can fail; this is not proof of a zero price.
 
+## Read-only coverage review
+
+Use `python -m research.cli inventory --source /PRIVATE/OneDrive/投资 --output /PRIVATE/coverage-DATE.json --env-file PRIVATE_ENV` to query Active rows and inspect local directory/file metadata. This command requires neither production enablement nor `--write`; it performs no cloud mutations, document hydration or model calls. Stdout contains counts only. Private JSON and human-readable CSV files are created with owner-only permissions, never overwrite prior exports, and are refused inside Git working trees.
+
+Every Active listing remains in the report, including duplicates and unmapped issuers. Exact directory-name matches are suggestions for human confirmation, never automatic corpus authorization. Hidden/symlink directories are excluded; traversal bounds and unreadable metadata remain gaps. Policy/trading feeds marked configured are still unverified until fetched. SEC lookup accepts the explicit `.O`/`.N` venue spelling and dotted class-share spelling while preserving original portfolio codes; multiple matching issuer identities fail closed.
+
 ## Private issuer registry
 
 Store in `RESEARCH_ISSUERS_JSON` (GitHub secret) or a local `RESEARCH_REGISTRY_FILE`; it is needed independently of Graph authentication. Never commit it. Each row contains:

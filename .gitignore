@@ -1,5 +1,8 @@
 # Secrets
 .env
+.research.env
+.research-graph-token.json
+research-private/
 
 # Python
 __pycache__/

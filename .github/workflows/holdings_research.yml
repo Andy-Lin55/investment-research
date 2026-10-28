@@ -1,0 +1,67 @@
+name: Holdings Research Pilot
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        type: choice
+        options: [doctor, scan, worker, weekly]
+        default: doctor
+        description: Separate research pilot (default off)
+  schedule:
+    - cron: '17 22 * * *'
+    - cron: '43 2,8,14 * * *'
+    - cron: '23 0 * * 6'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: holdings-research-single-publisher
+  cancel-in-progress: false
+
+jobs:
+  research:
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' && inputs.mode == 'doctor' || vars.HOLDINGS_RESEARCH_ENABLED == 'true')
+    runs-on: ubuntu-latest
+    environment: research-pilot
+    timeout-minutes: 90
+    env:
+      HOLDINGS_RESEARCH_ENABLED: ${{ vars.HOLDINGS_RESEARCH_ENABLED }}
+      NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+      RESEARCH_UNIVERSE_SOURCE_ID: ${{ vars.RESEARCH_UNIVERSE_SOURCE_ID }}
+      RESEARCH_NOTION_TASKS_SOURCE_ID: ${{ vars.RESEARCH_NOTION_TASKS_SOURCE_ID }}
+      RESEARCH_NOTION_REPORTS_SOURCE_ID: ${{ vars.RESEARCH_NOTION_REPORTS_SOURCE_ID }}
+      RESEARCH_ISSUERS_JSON: ${{ secrets.RESEARCH_ISSUERS_JSON }}
+      RESEARCH_OFFICIAL_FEEDS_JSON: ${{ secrets.RESEARCH_OFFICIAL_FEEDS_JSON }}
+      ONEDRIVE_CLIENT_ID: ${{ vars.ONEDRIVE_CLIENT_ID }}
+      ONEDRIVE_REFRESH_TOKEN: ${{ secrets.ONEDRIVE_REFRESH_TOKEN }}
+      RESEARCH_GITHUB_TOKEN: ${{ secrets.RESEARCH_GITHUB_TOKEN }}
+      DMXAPI_KEY: ${{ secrets.DMXAPI_KEY }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      RESEARCH_DMX_INPUT_CNY_PER_MILLION: ${{ vars.RESEARCH_DMX_INPUT_CNY_PER_MILLION }}
+      RESEARCH_DMX_OUTPUT_CNY_PER_MILLION: ${{ vars.RESEARCH_DMX_OUTPUT_CNY_PER_MILLION }}
+      RESEARCH_GEMINI_INPUT_CNY_PER_MILLION: ${{ vars.RESEARCH_GEMINI_INPUT_CNY_PER_MILLION }}
+      RESEARCH_GEMINI_OUTPUT_CNY_PER_MILLION: ${{ vars.RESEARCH_GEMINI_OUTPUT_CNY_PER_MILLION }}
+      SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: python -m pip install -r requirements.txt -r requirements-research.txt
+      - name: Configuration check
+        if: github.event_name == 'workflow_dispatch' && inputs.mode == 'doctor'
+        run: python -m research.cli doctor
+      - name: Collect disclosures and replay recent window
+        if: inputs.mode == 'scan' || github.event_name == 'schedule' && github.event.schedule != '23 0 * * 6'
+        run: python -m research.cli scan --write
+      - name: Weekly all-holdings screen
+        if: inputs.mode == 'weekly' || github.event.schedule == '23 0 * * 6'
+        run: python -m research.cli weekly --write --slots 3
+      - name: Resume queued work and independent deliveries
+        if: always() && (inputs.mode != 'doctor' || github.event_name == 'schedule')
+        run: python -m research.cli worker --write --limit 3

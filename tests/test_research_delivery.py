@@ -8,7 +8,7 @@ def api():
 
 
 class FakeHTTP:
-    def __init__(self):self.calls=[];self.files={};self.uploads={};self.fail_readback=False
+    def __init__(self):self.calls=[];self.files={};self.folders={};self.uploads={};self.fail_readback=False;self.fail_upload_once=False;self.lose_move_response=False;self.rival_before_move=None
     def __call__(self,method,path,*,body=None,headers=None,raw=False,authenticated=True):
         self.calls.append((method,path,headers))
         m=api()
@@ -17,15 +17,37 @@ class FakeHTTP:
             if key not in self.files:raise m.ServiceError(404)
             return b'wrong' if self.fail_readback else self.files[key]['body']
         if method=='GET':
-            if not path.endswith(('.json','.xlsx')):return dict(id='folder',folder={})
+            if not path.endswith(('.json','.xlsx')):
+                identity='folder-'+path;self.folders[identity]=path
+                return dict(id=identity,folder={})
             if path not in self.files:raise m.ServiceError(404)
             return {k:v for k,v in self.files[path].items() if k!='body'}
         if method=='POST' and path.endswith(':/createUploadSession'):
             key=path[:-21];url='https://upload.invalid/'+str(len(self.uploads))
             self.uploads[url]=key;return {'uploadUrl':url}
         if method=='PUT' and path.startswith('https://upload.invalid/'):
-            key=self.uploads[path];self.files[key]=dict(id='id-'+key,eTag='etag-1',webUrl='https://drive.invalid/file',body=body)
+            key=self.uploads[path]
+            if self.fail_upload_once:
+                self.fail_upload_once=False
+                self.files[key]=dict(id='id-'+key,eTag='etag-0',body=b'')
+                raise m.ServiceError(0)
+            self.files[key]=dict(id='id-'+key,eTag='etag-1',webUrl='https://drive.invalid/file',body=body)
             return {'id':'id-'+key,'eTag':'etag-1','webUrl':'https://drive.invalid/file'}
+        if method=='PATCH':
+            from urllib.parse import unquote,quote
+            from pathlib import PurePosixPath
+            identity=unquote(path.rsplit('/',1)[-1]);source=next(k for k,v in self.files.items() if v['id']==identity)
+            parent=self.folders[body['parentReference']['id']]
+            target=parent+'/'+quote(body['name'],safe='')
+            if self.rival_before_move is not None:
+                self.files[target]=dict(id='rival',eTag='newer',body=self.rival_before_move);self.rival_before_move=None
+            assert body['@microsoft.graph.conflictBehavior']=='fail'
+            assert headers['If-Match']==self.files[source]['eTag']
+            if target in self.files:raise m.ServiceError(409)
+            self.files[target]=self.files.pop(source)
+            if self.lose_move_response:
+                self.lose_move_response=False;raise m.ServiceError(0)
+            return self.files[target]
         raise AssertionError((method,path))
 
 
@@ -51,6 +73,34 @@ def test_graph_rejects_unscoped_or_traversing_paths(path):
 def test_upload_resume_does_not_rewrite_existing_human_file():
     h=FakeHTTP();drive=api().GraphDrive(h);drive.put_immutable('投资/A/model.xlsx',b'human')
     with pytest.raises(api().VersionConflict):drive.put_immutable('投资/A/model.xlsx',b'candidate')
+
+
+def test_interrupted_upload_leaves_no_empty_final_file_and_retry_recovers():
+    h=FakeHTTP();h.fail_upload_once=True;drive=api().GraphDrive(h);path='投资/A/evidence.json'
+    with pytest.raises(api().ServiceError):drive.put_immutable(path,b'complete source')
+    assert drive.locator(path) not in h.files
+    assert any(v['body']==b'' for v in h.files.values())
+    result=drive.put_immutable(path,b'complete source')
+    assert result['verified'] and h.files[drive.locator(path)]['body']==b'complete source'
+
+
+def test_lost_final_move_response_recovers_without_a_second_upload():
+    h=FakeHTTP();h.lose_move_response=True;drive=api().GraphDrive(h)
+    result=drive.put_immutable('投资/A/evidence.json',b'source')
+    assert result['verified'] and len(h.uploads)==1
+    assert any(c[0]=='PATCH' for c in h.calls)
+
+
+def test_concurrent_human_file_created_before_move_is_preserved():
+    h=FakeHTTP();h.rival_before_move=b'human';drive=api().GraphDrive(h);path='投资/A/evidence.json'
+    with pytest.raises(api().VersionConflict):drive.put_immutable(path,b'candidate')
+    assert h.files[drive.locator(path)]['body']==b'human'
+
+
+def test_incomplete_staging_readback_never_creates_final_file():
+    h=FakeHTTP();h.fail_readback=True;drive=api().GraphDrive(h);path='投资/A/evidence.json'
+    with pytest.raises(api().DeliveryError):drive.put_immutable(path,b'source')
+    assert drive.locator(path) not in h.files
 
 
 def test_notion_task_store_paginates_and_preserves_manual_review():

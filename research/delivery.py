@@ -5,6 +5,7 @@ import json
 from pathlib import Path,PurePosixPath
 from urllib.parse import quote
 import zipfile
+from uuid import uuid4
 
 from research.runtime import VersionConflict
 
@@ -42,6 +43,40 @@ class GraphDrive:
                 parent=self.locator('/'.join(parts[:i]))
                 self.http('POST',parent+':/children',body={'name':name,'folder':{},'@microsoft.graph.conflictBehavior':'fail'})
     def put_immutable(self,path,data):
+        """Only verified staging content may become an immutable final file."""
+        if not isinstance(data,bytes) or not data:raise ValueError('nonempty bytes required')
+        if len(data)>40*1024*1024:raise ValueError('bounded upload supports files up to 40 MiB')
+        path=scoped_path(path);digest=hashlib.sha256(data).hexdigest()
+        def existing():
+            try:actual,meta=self.read(path)
+            except ServiceError as error:
+                if error.status==404:return None
+                raise
+            if hashlib.sha256(actual).hexdigest()!=digest:raise VersionConflict('existing file differs; never overwrite')
+            return dict(path=path,sha256=digest,id=meta['id'],etag=meta['eTag'],url=meta.get('webUrl'),verified=True)
+        saved=existing()
+        if saved:return saved
+        self._parents(path)
+        parent=self.http('GET',self.locator(PurePosixPath(path).parent.as_posix()))
+        staging='投资/_研究上传暂存/'+hashlib.sha256(path.encode()).hexdigest()[:20]+'/'+uuid4().hex+'/'+PurePosixPath(path).name
+        staged=self._put_direct_immutable(staging,data)
+        # Recheck before moving; the service must also reject concurrent names.
+        saved=existing()
+        if saved:return saved
+        try:
+            self.http('PATCH','/me/drive/items/'+quote(staged['id'],safe=''),
+                body={'parentReference':{'id':parent['id']},'name':PurePosixPath(path).name,
+                      '@microsoft.graph.conflictBehavior':'fail'},headers={'If-Match':staged['etag']})
+        except ServiceError:
+            # A commit can succeed even if its response is lost. Never replay blindly.
+            saved=existing()
+            if saved:return saved
+            raise
+        saved=existing()
+        if not saved:raise DeliveryError('committed file not found on read-back')
+        return saved
+
+    def _put_direct_immutable(self,path,data):
         if not isinstance(data,bytes) or not data:raise ValueError('nonempty bytes required')
         if len(data)>40*1024*1024:raise ValueError('bounded upload supports files up to 40 MiB')
         loc=self.locator(path);digest=hashlib.sha256(data).hexdigest()

@@ -63,6 +63,14 @@ def test_only_explicit_human_assumption_edits_can_be_imported():
     assert m['assumptions']['base'][0]['values']['growth']==.1
 
 
+def test_excel_numeric_roundtrip_without_edits_keeps_model_identity():
+    m=fixture();w=load_workbook(BytesIO(api().export_model(m)))
+    raw=BytesIO();w.save(raw)  # Native Excel also stores integral doubles as integer literals.
+    out=api().import_assumptions(raw.getvalue(),m)
+    assert out['assumption_changes']==[]
+    assert out['model_version']==m['model_version']
+
+
 @pytest.mark.parametrize('change',['formula','baseline','identity','source_formula','duplicate','blank_source'])
 def test_import_rejects_modified_baseline_stale_identity_or_untrusted_cells(change):
     m=fixture();w=load_workbook(BytesIO(api().export_model(m)))

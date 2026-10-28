@@ -78,3 +78,30 @@ def test_mapped_feeds_are_configuration_only_and_not_complete_coverage(tmp_path)
     feeds=[dict(category='policy',issuer_ids=['issuer-a'],exposure_rationale='Explicit mapping',url='https://www.gov.cn/feed')]
     r=api().build_inventory([dict(ticker='000001.SZ',name='甲公司')],registry(),root,observed_at='2026-10-28',feeds=feeds)
     assert r['listings'][0]['information']['policy']['status']=='configured_unverified'
+
+
+def test_missing_active_ticker_stays_visible_but_worker_remains_strict(tmp_path,monkeypatch):
+    from research import cli
+    root=tmp_path/'投资';root.mkdir()
+    pages=[{'id':'valid','properties':{'Ticker':{'rich_text':[{'plain_text':'000001.SZ'}]}}},
+           {'id':'repair','properties':{'Ticker':{'rich_text':[]},'Name':{'title':[{'plain_text':'乙公司'}]}}}]
+    monkeypatch.setattr(cli,'pages',lambda *a:iter(pages))
+    records=cli.active_records(None,{'RESEARCH_UNIVERSE_SOURCE_ID':'source'})
+    assert len(records)==2
+    r=api().build_inventory(records,registry(),root,observed_at='2026-10-28')
+    assert r['listings'][1]['notion_page_id']=='repair'
+    assert 'missing_active_ticker' in r['listings'][1]['gaps']
+    with pytest.raises(ValueError):cli.active_roster(None,{'RESEARCH_UNIVERSE_SOURCE_ID':'source'},registry())
+
+
+def test_csv_discloses_category_gaps_and_global_scan_limits(tmp_path):
+    import csv
+    root=tmp_path/'投资';root.mkdir();(root/'甲公司').mkdir();(root/'行业').mkdir();(root/'行业'/'深层').mkdir()
+    reg=registry();reg[0]['forecast_inputs_path']='投资/甲公司/forecast.json'
+    r=api().build_inventory([dict(ticker='000001.SZ',name='甲公司')],reg,root,observed_at='2026-10-28',max_directories=1)
+    r['directory_scan_errors']=['PermissionError']
+    out=tmp_path/'review.json';api().export_inventory(r,out)
+    row=next(csv.DictReader(io for io in out.with_suffix('.csv').read_text(encoding='utf-8-sig').splitlines()))
+    assert '未配置' in row['交易／资金面'] and '未配置' in row['政策面']
+    assert row['目录扫描截断']=='是' and row['目录读取错误']=='PermissionError'
+    assert 'policy_feed_not_configured' in row['缺口']

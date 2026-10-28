@@ -21,8 +21,9 @@ BASE_ROWS = dict(zip(BASE_FIELDS, (5,17,18,19,20,21,22,23,24,25,26)))
 
 def checked(model):
     rebuilt = project(model['baseline'], model['assumptions'], as_of=model['as_of'])
-    for k in ('model_version','issuer_id','currency','status','scenarios','missing'):
+    for k in ('model_version','issuer_id','currency','status','scenarios'):
         if rebuilt[k] != model[k]:raise ValueError('model snapshot failed reproducibility check')
+    if sorted(rebuilt['missing'])!=sorted(model['missing']):raise ValueError('model missing inputs differ')
     if len(model['assumptions']['base']) > 10:raise ValueError('review at most ten annual forecast periods')
     return rebuilt
 
@@ -64,7 +65,8 @@ def export_model(model):
     for i,field in enumerate(BASE_FIELDS,1):
         baseline.write_row(i,0,[field,model['baseline'][field],model['baseline']['source_locator']],label)
     baseline.set_column('C:C',65)
-    assumptions = sheets['Assumptions'];assumptions.write_row(0,0,['Scenario','Year','Driver','Value','Source'],header)
+    assumptions = sheets['Assumptions'];assumptions.write_row(0,0,['Scenario','Year','Driver','Value','Source','Input valid','All inputs ready'],header)
+    assumptions.set_column('F:G',22)
     refs={};index=1
     for name in CASES:
         for period in model['assumptions'][name]:
@@ -74,9 +76,13 @@ def export_model(model):
                 if number(value):assumptions.write_number(index,3,value,editable)
                 else:assumptions.write_blank(index,3,None,editable)
                 assumptions.write_string(index,4,period.get('sources',{}).get(field) or '',label)
+                source=period.get('sources',{}).get(field)
+                valid=number(value) and isinstance(source,str) and bool(source.strip())
+                assumptions.write_formula(index,5,f'=IF(ISNUMBER(D{index+1}),LEN(TRIM(E{index+1}))>0,FALSE)',None,valid)
                 assumptions.set_row(index,30)
                 refs[name,period['year'],field]=f'Assumptions!D{index+1}';index+=1
     assumptions.autofilter(0,0,index-1,4)
+    assumptions.write_formula(1,6,f'=COUNTIF(F2:F{index},TRUE)={index-1}',None,not bool(model['missing']))
     for name in CASES:
         sheet=sheets[name.title()];sheet.write_row(0,0,[name.upper()+'｜预测假设','历史基准'],header)
         for row,text in ROWS.items():sheet.write(row-1,0,text,label)
@@ -85,8 +91,9 @@ def export_model(model):
         for col,period in enumerate(model['assumptions'][name],2):
             year=period['year'];c=xl_col_to_name(col);p=xl_col_to_name(col-1)
             sheet.write(0,col,str(year)+'E',header)
-            # Missing input in any scenario blocks all forecasts, matching project().
-            if not model['scenarios']:continue
+            # Keep formulas in pending templates so filling every required input
+            # can recalculate. Clearing any required value/source suppresses all
+            # scenarios instead of treating a missing assumption as zero.
             a={k:refs[name,year,k] for k in DRIVERS}
             f={5:f'{p}5*(1+{a["growth"]})',6:f'{c}5*{a["cogs_ratio"]}',7:f'{c}5*{a["opex_ratio"]}',
                8:f'{p}20*{a["dep_rate"]}',9:f'({p}23+{c}23)/2*{a["interest_rate"]}',
@@ -102,13 +109,16 @@ def export_model(model):
                33:f'{c}5*{a["capex_ratio"]}',34:f'MAX({c}12,0)*{a["dividend_payout"]}',35:f'{c}17-{p}17',
                38:f'SUM({c}17:{c}21)-SUM({c}22:{c}25)',39:f'{c}35-{c}29-{c}30-{c}31-{c}32',
                40:f'MAX(0,-{c}17)',43:a['pe_multiple'],44:f'IF({c}14>0,{c}14*{c}43,"")'}
-            row=model['scenarios'][name][col-2];inc=row['income'];bal=row['balance'];cf=row['cashflow']
-            caches=dict(zip(range(5,15),[inc[k] for k in ('revenue','cogs','opex','depreciation','interest','pretax','tax','net_income','parent_net_income','eps')]))
-            caches.update(dict(zip(range(17,27),[bal[k] for k in ('cash','receivables','inventory','ppe','other_assets','payables','debt','other_liabilities','equity','shares')])))
-            caches.update(dict(zip(range(29,36),[cf[k] for k in ('operating','investing','financing','fx','capex','dividends','change')])))
-            caches.update({38:row['checks']['balance_difference'],39:row['checks']['cash_difference'],
-                           40:row['funding_shortfall'],43:row['valuation']['multiple'],44:row['valuation']['price']})
-            for r,formula in f.items():sheet.write_formula(r-1,col,'='+formula,numeric,caches[r] if caches[r] is not None else '')
+            caches={r:'' for r in f}
+            if model['scenarios']:
+                row=model['scenarios'][name][col-2];inc=row['income'];bal=row['balance'];cf=row['cashflow']
+                caches.update(dict(zip(range(5,15),[inc[k] for k in ('revenue','cogs','opex','depreciation','interest','pretax','tax','net_income','parent_net_income','eps')])))
+                caches.update(dict(zip(range(17,27),[bal[k] for k in ('cash','receivables','inventory','ppe','other_assets','payables','debt','other_liabilities','equity','shares')])))
+                caches.update(dict(zip(range(29,36),[cf[k] for k in ('operating','investing','financing','fx','capex','dividends','change')])))
+                caches.update({38:row['checks']['balance_difference'],39:row['checks']['cash_difference'],
+                               40:row['funding_shortfall'],43:row['valuation']['multiple'],44:row['valuation']['price']})
+            for r,formula in f.items():
+                sheet.write_formula(r-1,col,'=IF(Assumptions!$G$2,'+formula+',"")',numeric,caches[r] if caches[r] is not None else '')
         last=xl_col_to_name(len(model['assumptions'][name])+1)
         sheet.conditional_format(f'C38:{last}39',{'type':'cell','criteria':'not between','minimum':-1e-6,'maximum':1e-6,
             'format':book.add_format({'bg_color':'#FFDAD6'})})

@@ -21,7 +21,7 @@ def test_workbook_has_linked_statements_and_independently_checked_results():
     data=api().export_model(fixture())
     formulas=load_workbook(BytesIO(data));values=load_workbook(BytesIO(data),data_only=True)
     assert formulas.sheetnames==['Review','Baseline','Assumptions','Base','Bull','Bear','Changes']
-    assert formulas['Base']['C5'].value=='=B5*(1+Assumptions!D2)'
+    assert formulas['Base']['C5'].value=='=IF(Assumptions!$G$2,B5*(1+Assumptions!D2),"")'
     assert values['Base']['C5'].value==1100
     assert values['Base']['C12'].value==217.5
     assert values['Base']['C25'].value==452.25
@@ -36,8 +36,8 @@ def test_later_year_links_prior_balance_and_does_not_reuse_opening_cash():
     s=scenarios()
     for rows in s.values():rows.append(dict(deepcopy(rows[0]),year=2027))
     m=project(baseline(),s,as_of='2026-10-27');w=load_workbook(BytesIO(api().export_model(m)))
-    assert w['Base']['D5'].value.startswith('=C5*')
-    assert w['Base']['D17'].value.startswith('=C17+')
+    assert ',C5*' in w['Base']['D5'].value
+    assert ',C17+' in w['Base']['D17'].value
     cached=load_workbook(BytesIO(api().export_model(m)),data_only=True)
     assert cached['Base']['D5'].value==pytest.approx(1210)
     assert cached['Base']['D38'].value==pytest.approx(0,abs=1e-8)
@@ -47,7 +47,7 @@ def test_missing_assumption_produces_editable_blank_without_valuation():
     s=scenarios();s['base'][0]['values']['growth']=None
     m=project(baseline(),s,as_of='2026-10-27');w=load_workbook(BytesIO(api().export_model(m)))
     assert w['Assumptions']['D2'].value is None
-    assert w['Base']['C44'].value is None
+    assert load_workbook(BytesIO(api().export_model(m)),data_only=True)['Base']['C44'].value is None
     assert 'pending_assumptions' in w['Review']['B4'].value
 
 
@@ -84,6 +84,31 @@ def test_source_strings_never_become_formulas_or_clickable_remote_links():
     assert w['Baseline']['C2'].hyperlink is None
 
 
+def test_pending_model_survives_sorted_json_checkpoint_roundtrip():
+    import json
+    s=scenarios();s['bull'][0]['values']['growth']=None;s['bear'][0]['values']['growth']=None
+    m=project(baseline(),s,as_of='2026-10-27')
+    saved=json.loads(json.dumps(m,sort_keys=True))
+    raw=api().export_model(saved)
+    assert api().import_assumptions(raw,saved)['status']=='pending_assumptions'
+
+
+def test_editable_workbook_guards_forecasts_after_required_values_or_sources_are_cleared():
+    complete=load_workbook(BytesIO(api().export_model(fixture())))
+    pending_inputs=scenarios();pending_inputs['base'][0]['values']['growth']=None
+    pending=load_workbook(BytesIO(api().export_model(project(baseline(),pending_inputs,as_of='2026-10-27'))))
+    # A shared prerequisite checks both value and source on every assumption row.
+    assert complete['Assumptions']['G2'].data_type=='f'
+    assert complete['Assumptions']['F2'].value=='=IF(ISNUMBER(D2),LEN(TRIM(E2))>0,FALSE)'
+    for book in (complete,pending):
+        for tab in ('Base','Bull','Bear'):
+            for cell in ('C5','C12','C17','C38','C44'):
+                assert book[tab][cell].value.startswith('=IF(Assumptions!$G$2,')
+    cached=load_workbook(BytesIO(api().export_model(project(baseline(),pending_inputs,as_of='2026-10-27'))),data_only=True)
+    assert cached['Assumptions']['G2'].value is False
+    assert cached['Base']['C44'].value is None
+
+
 def test_every_statement_formula_matches_cache_across_distinct_cases_and_years():
     from openpyxl.utils.cell import range_boundaries,get_column_letter
     s=scenarios()
@@ -98,6 +123,11 @@ def test_every_statement_formula_matches_cache_across_distinct_cases_and_years()
         if key in memo:return memo[key]
         raw=formulas[sheet][cell].value
         if not isinstance(raw,str) or not raw.startswith('='):return raw
+        raw=raw.replace('$','')
+        prefix='=IF(Assumptions!G2,'
+        if raw.startswith(prefix):
+            if not value('Assumptions','G2'):return ''
+            raw='='+raw[len(prefix):-4]
         def substitute(match):
             tab=match[1] or sheet
             if ':' in match[2]:
@@ -105,7 +135,10 @@ def test_every_statement_formula_matches_cache_across_distinct_cases_and_years()
                 return repr([value(tab,f'{get_column_letter(c)}{r}') for r in range(r1,r2+1) for c in range(c1,c2+1)])
             return repr(value(tab,match[2]))
         expression=re.sub(r'(?:(\w+)!)?([A-Z]+[0-9]+(?::[A-Z]+[0-9]+)?)',substitute,raw[1:])
-        result=eval(expression,{'__builtins__':{}},{'SUM':sum,'MAX':max,'IF':lambda c,a,b:a if c else b})
+        expression=re.sub(r'(?<![<>!])=(?!=)','==',expression).replace('TRUE','True').replace('FALSE','False')
+        result=eval(expression,{'__builtins__':{}},{'SUM':sum,'MAX':max,'IF':lambda c,a,b:a if c else b,
+            'COUNTIF':lambda rows,v:sum(r==v for r in rows),'ISNUMBER':lambda v:isinstance(v,(int,float)) and not isinstance(v,bool),
+            'LEN':len,'TRIM':lambda v:str(v or '').strip()})
         memo[key]=result;return result
     for tab in ('Base','Bull','Bear'):
         for row in formulas[tab]:
@@ -114,3 +147,9 @@ def test_every_statement_formula_matches_cache_across_distinct_cases_and_years()
                     assert value(tab,cell.coordinate)==pytest.approx(cached[tab][cell.coordinate].value)
     assert cached['Bull']['D5'].value==pytest.approx(1690)
     assert cached['Bear']['D5'].value==pytest.approx(640)
+    formulas['Assumptions']['D2']=None;memo.clear()
+    for tab in ('Base','Bull','Bear'):assert value(tab,'C44')==''
+    formulas['Assumptions']['D2']=.1;formulas['Assumptions']['E2']='   ';memo.clear()
+    assert value('Base','C5')==''
+    formulas['Assumptions']['D2']=0.;formulas['Assumptions']['E2']='explicit zero growth';memo.clear()
+    assert value('Base','C5')==1000

@@ -158,5 +158,10 @@ def import_assumptions(data,original):
         if value.data_type=='f' or source.data_type=='f':raise ValueError('literal assumptions and sources required')
         if value.value is not None and (not number(value.value) or not isinstance(source.value,str) or not source.value.strip()):
             raise ValueError('finite numeric assumption with explicit source required')
-        row=positions[name,year];row.setdefault('values',{})[field]=value.value;row.setdefault('sources',{})[field]=source.value or ''
+        row=positions[name,year]
+        previous=row.get('values',{}).get(field)
+        # Excel normalizes integral doubles (0.0 -> 0). Preserve the authoritative
+        # original representation for equal numbers, so a save is not a revision.
+        imported=previous if number(previous) and number(value.value) and previous==value.value else value.value
+        row.setdefault('values',{})[field]=imported;row.setdefault('sources',{})[field]=source.value or ''
     return project(original['baseline'],s,as_of=original['as_of'],previous=original)

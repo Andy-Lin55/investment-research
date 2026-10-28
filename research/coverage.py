@@ -33,7 +33,8 @@ def build_inventory(records,registry,root,*,observed_at,max_directories=5000,max
         candidates=[p.relative_to(root.parent).as_posix() for p in directories if name and p.name==name]
         path=h['company_path'] if h else None
         if not h:gaps.append('issuer_mapping_not_confirmed')
-        if counts[ticker]>1:gaps.append('duplicate_active_ticker')
+        if not ticker:gaps.append('missing_active_ticker')
+        elif counts[ticker]>1:gaps.append('duplicate_active_ticker')
         if h:
             parts=PurePosixPath(path).parts[1:];company=root.joinpath(*parts)
             unsafe=any(root.joinpath(*parts[:i+1]).is_symlink() for i in range(len(parts)))
@@ -52,7 +53,10 @@ def build_inventory(records,registry,root,*,observed_at,max_directories=5000,max
             if h and any(f.get('category')==category and h['issuer_id'] in f.get('issuer_ids',[])
                          and f.get('exposure_rationale') and f.get('url') for f in feeds):
                 information[category]['status']='configured_unverified'
-        rows.append(dict(ticker=ticker,name=name,notion_url=record.get('notion_url'),
+            else:gaps.append(category+'_feed_not_configured')
+        if truncated:gaps.append('directory_scan_truncated')
+        if scan_errors:gaps.append('directory_scan_errors')
+        rows.append(dict(ticker=ticker,name=name,notion_url=record.get('notion_url'),notion_page_id=record.get('notion_page_id'),
             mapping_status='confirmed' if h else 'pending',issuer_id=h['issuer_id'] if h else None,
             company_path=path,folder_candidates=sorted(candidates),files=files,gaps=gaps,
             information=information))
@@ -74,10 +78,17 @@ def export_inventory(report,output):
         value=str(value)
         return "'"+value if value.lstrip().startswith(('=','+','-','@','\t','\r','\n')) else value
     stream=io.StringIO();writer=csv.writer(stream)
-    writer.writerow(['持仓代码','公司名称','映射状态','已确认目录','候选目录（待确认）','已有资料数','缺口'])
+    writer.writerow(['持仓代码','公司名称','映射状态','已确认目录','候选目录（待确认）','已有资料数',
+                     '交易／资金面','基本面公告','财务模型','政策面','目录扫描截断','目录读取错误','缺口','Notion记录'])
+    labels={'not_configured':'未配置','configured_unverified':'已配置，待验证','collector_configured':'已配置，待验证',
+            'configured':'已配置，待验证','unmapped':'未映射'}
     for row in report['listings']:
-        writer.writerow([cell(v) for v in (row['ticker'],row['name'],row['mapping_status'],row['company_path'] or '',
-            '；'.join(row['folder_candidates']),len(row['files']),'；'.join(row['gaps']))])
+        info=row['information'];fundamentals=info['fundamentals']
+        writer.writerow([cell(v) for v in (row['ticker'],row['name'],'已确认' if row['mapping_status']=='confirmed' else '待确认',row['company_path'] or '',
+            '；'.join(row['folder_candidates']),len(row['files']),labels[info['trading_flows']['status']],
+            labels[fundamentals['disclosures']],labels[fundamentals['financial_model']],labels[info['policy']['status']],
+            '是' if report['directory_scan_truncated'] else '否','；'.join(report['directory_scan_errors']),
+            '；'.join(row['gaps']),row.get('notion_url') or row.get('notion_page_id') or '')])
     for p,body in ((output,json.dumps(report,ensure_ascii=False,indent=2).encode()),
                    (csvpath,stream.getvalue().encode('utf-8-sig'))):
         fd=os.open(p,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)

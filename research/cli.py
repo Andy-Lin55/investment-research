@@ -130,15 +130,16 @@ def active_records(http,env):
     source=env.get('RESEARCH_UNIVERSE_SOURCE_ID') or source_id(http,env['NOTION_UNIVERSE_DB_ID'])
     records=[]
     for page in pages(http,source,{'filter':{'property':'Status','select':{'equals':'Active'}}}):
-        ticker=plain(page['properties']['Ticker']['rich_text'])
-        if not ticker:raise ValueError('Active listing has no ticker')
+        ticker=plain(page['properties'].get('Ticker',{}).get('rich_text',[])).strip()
         titles=[plain(p.get('title',[])) for p in page['properties'].values() if 'title' in p]
-        records.append(dict(ticker=ticker,name=next(iter(titles),''),notion_url=page.get('url')))
+        records.append(dict(ticker=ticker,name=next(iter(titles),''),notion_url=page.get('url'),notion_page_id=page.get('id')))
     return records
 
 
 def active_roster(http,env,reg):
-    return match_roster([r['ticker'] for r in active_records(http,env)],reg)
+    records=active_records(http,env)
+    if any(not r['ticker'] for r in records):raise ValueError('Active listing has no ticker')
+    return match_roster([r['ticker'] for r in records],reg)
 
 
 def scan(roster,store,drive,*,start,end):

@@ -58,7 +58,7 @@ class Budget:
             raise ValueError('finite nonnegative budget limits required')
         self.store=store;self.limits=(task_limit,day_limit,month_limit)
 
-    def reserve(self,task,ceiling,day,attempt_id):
+    def reserve(self,task,ceiling,day,attempt_id,*,attempt=None):
         date.fromisoformat(day)
         if not number(ceiling) or ceiling<=0:raise ValueError('positive cost ceiling required')
         fresh=self.store.get(task['task_id'])
@@ -69,9 +69,12 @@ class Budget:
               sum(c['amount_cny'] for c in charges if c['day']==day),
               sum(c['amount_cny'] for c in charges if c['day'][:7]==day[:7]))
         if any(a+ceiling>b+1e-10 for a,b in zip(used,self.limits)):
-            fresh['status']='budget_blocked';self.store.put(fresh)
+            fresh['status']='budget_blocked';fresh['blocked_on_day']=day;self.store.put(fresh)
             raise BudgetBlocked('API budget reached; task remains pending')
         fresh['charges'].append(dict(attempt_id=attempt_id,day=day,amount_cny=ceiling,state='reserved'))
+        if attempt is not None:
+            if attempt.get('attempt_id')!=attempt_id:raise ValueError('attempt identity differs')
+            fresh['attempts'].append(deepcopy(attempt))
         self.store.put(fresh);return fresh
 
     def settle(self,task_id,attempt_id,actual):

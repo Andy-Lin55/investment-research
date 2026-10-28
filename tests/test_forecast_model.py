@@ -10,7 +10,7 @@ def model():
 
 def baseline():
     return dict(issuer_id='issuer-a', currency='CNY', period_end='2025-12-31', revision_id='financial-v1',
-                source_locator='annual report p10', cash_scope_confirmed=True,
+                source_locator='annual report p10', cash_scope_confirmed=True,amount_unit='CNY',share_unit='shares',
                 revenue=1000., cash=100., receivables=100., inventory=100., ppe=300., other_assets=100.,
                 payables=100., debt=200., other_liabilities=100., equity=300., shares=100.)
 

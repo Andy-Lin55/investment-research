@@ -95,6 +95,8 @@ class NotionTaskStore:
         self.ids[task['task_id']]=page['id']
         review=page['properties'].get('HumanReview',{}).get('select')
         if review:task['human_review']=review['name']
+        if 'RetryRequested' in page['properties']:
+            task['retry_requested']=page['properties']['RetryRequested']['checkbox']
         if hydrate:
             for kind,ref in [('content',task.get('evidence',{}).get('text_ref')),('context',task.get('context_ref'))]:
                 if not ref:continue
@@ -107,7 +109,7 @@ class NotionTaskStore:
                     self.cache[identity]=pack['text'] if kind=='content' else pack['context']
                 if identity in self.cache:
                     if kind=='content':
-                        text=self.cache[identity]
+                        text=self.cache[identity].strip()
                         if hashlib.sha256(text.encode()).hexdigest()!=task['card']['source']['content_sha256']:
                             raise DeliveryError('source text revision mismatch')
                         task['evidence']['content']=text
@@ -135,6 +137,7 @@ class NotionTaskStore:
         if len(encoded)>150000 or len(encoded.encode())>350000:raise ValueError('checkpoint too large; use a source-file reference')
         key=task['task_id'];old=self.get(key)
         props={'Checkpoint':text_property(encoded),'State':{'select':{'name':task['status']}}}
+        if 'retry_requested' in task:props['RetryRequested']={'checkbox':bool(task['retry_requested'])}
         if old:
             self.http('PATCH',f'/pages/{self.ids[key]}',body={'properties':props})
         else:
@@ -155,11 +158,12 @@ class NotionReports:
     def publish(self,task,result,files,*,candidate=True,lookup_only=False):
         """Add immutable candidate report rows; do not update Universe signals."""
         key=task['publication_key'];query={'filter':{'property':'TriggerEventID','rich_text':{'equals':key}},'page_size':100}
+        body=render_report(task,result,files)
         rows=self.http('POST',f'/data_sources/{self.data_source}/query',body=query)['results']
         if len(rows)>1:raise DeliveryError('duplicate report keys')
-        if rows:return self._verify(rows[0],key)
+        if rows:return self._verify(rows[0],key,body)
         if lookup_only:return None
-        report=result['report'];body=render_report(task,result,files)
+        report=result['report']
         blocks=[{'object':'block','type':'paragraph','paragraph':{'rich_text':rich(body[i:i+1800])}}
                 for i in range(0,len(body),1800)]
         if len(blocks)>95:raise ValueError('bounded report too long; write full workpaper and shorten report')
@@ -204,6 +208,10 @@ def render_report(task,result,files):
                   '事实来源：'+task['card']['source']['url'],'人工状态：'+task['human_review'],
                   '自动检查仅检查结构、引用与模型计算；不代表事实已获人工确认。'])
     lines.append('资料缺口：'+json.dumps(task.get('context_gaps',[]),ensure_ascii=False))
+    extraction=task.get('evidence',{}).get('extraction')
+    if extraction:
+        lines.append('原文提取覆盖：'+('部分章节；请结合完整原件复核' if extraction.get('partial') else '提取文本已覆盖可读原文')+
+                     '；纳入字符 '+str(extraction.get('included_characters'))+'／可提取字符 '+str(extraction.get('extracted_characters')))
     return '\n\n'.join(lines)
 
 

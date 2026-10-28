@@ -1,7 +1,7 @@
 """Single-publisher, checkpointed research; resumes delivery without repaying AI."""
 from copy import deepcopy
 from datetime import datetime,timezone
-import json,time
+import json,time,re
 
 from financials.forecast import digest,number,project
 from research.delivery import ServiceError
@@ -14,6 +14,7 @@ def encoded(value):return json.dumps(value,ensure_ascii=False,sort_keys=True,all
 def process(task_id,*,store,drive,reports,providers,budget,day,model=None):
     task=store.get(task_id)
     if not task:raise ValueError('unknown durable task')
+    if task['status'] in {'retry_release','published'}:return task
     fingerprint=digest([task['card']['revision_id'],task.get('context_digest'),model,'holdings-v1'])
     if task.get('input_fingerprint')!=fingerprint:
         task.update(input_fingerprint=fingerprint,publication_key=task_id+':'+fingerprint,
@@ -32,7 +33,9 @@ def process(task_id,*,store,drive,reports,providers,budget,day,model=None):
                     or rebuilt['model_version']!=model['model_version'] or rebuilt['scenarios']!=model['scenarios']):
                 raise ValueError('supplied model identity or reproducibility failed')
         except (ValueError,KeyError,TypeError) as error:return state('quality_blocked',error)
-    if not task['evidence'].get('content','').strip() or task.get('needs_full_article'):return state('pending_evidence')
+        if model['as_of']<task['card']['source']['published_at'][:10]:return state('pending_model_refresh')
+    substantive=re.sub(r'\[PDF page \d+\]','',task['evidence'].get('content','')).strip()
+    if not substantive or task.get('needs_full_article'):return state('pending_evidence')
     if task.get('needs_context'):return state('pending_context')
     root=task['company_path']
     try:
@@ -57,10 +60,11 @@ def process(task_id,*,store,drive,reports,providers,budget,day,model=None):
         except Exception as error:return state('retry_delivery',error)
     if not task.get('analysis'):
         card=deepcopy(task['card']);card['source_text']=task['evidence']['content']
+        card['extraction_coverage']=task['evidence'].get('extraction')
         if task['evidence'].get('exposure_rationale'):
             card['company_exposure_mapping']={'rationale':task['evidence']['exposure_rationale'],
                                               'status':'explicit registry mapping; not independent exposure verification'}
-        prompt=research_prompt([card],model,context=task.get('context'))
+        prompt=research_prompt([card],model,context=task.get('context'),previous=task.get('previous_report'))
         if task['kind']=='weekly_deep':
             try:
                 request=dict(task_id=task_id,input_fingerprint=fingerprint,prompt=prompt,
@@ -85,6 +89,10 @@ def process(task_id,*,store,drive,reports,providers,budget,day,model=None):
             except (ValueError,KeyError,TypeError) as error:return state('quality_blocked',error)
             except Exception as error:return state('retry_delivery',error)
     if not task.get('analysis'):
+        ids={a['attempt_id'] for a in task['attempts']}
+        if (any(c['attempt_id'] not in ids for c in task['charges'])
+                or any(a.get('status')=='inflight' for a in task['attempts'])):
+            return state('pending_attempt_confirmation')
         successful=False
         for provider in providers:
             if len(task['attempts'])>=2:break
@@ -93,11 +101,11 @@ def process(task_id,*,store,drive,reports,providers,budget,day,model=None):
             cap=4000;ceiling=((len(prompt.encode())+256)*rates[0]+cap*rates[1])/1e6
             if ceiling<=0:return state('pending_pricing')
             attempt_id=task_id+':'+str(len(task['attempts']))
-            try:task=budget.reserve(task,ceiling,day,attempt_id)
+            attempt=dict(attempt_id=attempt_id,provider=provider.name,requested_model=provider.model,
+                         started_at=datetime.now(timezone.utc).isoformat(),status='inflight')
+            try:task=budget.reserve(task,ceiling,day,attempt_id,attempt=attempt)
             except BudgetBlocked:return store.get(task_id)
-            task['attempts'].append(dict(attempt_id=attempt_id,provider=provider.name,requested_model=provider.model,
-                                          started_at=datetime.now(timezone.utc).isoformat(),status='inflight'))
-            store.put(task);start=time.monotonic()
+            start=time.monotonic()
             try:response=provider(prompt,max_output_tokens=cap)
             except Exception as error:
                 task['attempts'][-1].update(status='unknown_cost',error_type=type(error).__name__)

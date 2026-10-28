@@ -1,6 +1,7 @@
 """Explicit service wiring; does not load .env or contact services on import."""
 import base64
 import json
+from pathlib import Path
 from urllib.parse import urlsplit,quote
 
 from research.delivery import ServiceError,scoped_path
@@ -75,7 +76,10 @@ def doctor(env):
               'RESEARCH_NOTION_REPORTS_SOURCE_ID','ONEDRIVE_CLIENT_ID','ONEDRIVE_REFRESH_TOKEN',
               'DMXAPI_KEY','RESEARCH_DMX_INPUT_CNY_PER_MILLION','RESEARCH_DMX_OUTPUT_CNY_PER_MILLION']
     if env.get('GITHUB_ACTIONS')=='true':required.append('RESEARCH_GITHUB_TOKEN')
-    else:required.append('ONEDRIVE_TOKEN_CACHE')
+    else:
+        required.append('ONEDRIVE_TOKEN_CACHE')
+        if env.get('ONEDRIVE_TOKEN_CACHE') and Path(env['ONEDRIVE_TOKEN_CACHE']).is_file():
+            required.remove('ONEDRIVE_REFRESH_TOKEN')
     return dict(enabled=env.get('HOLDINGS_RESEARCH_ENABLED')=='true',missing=[k for k in required if not env.get(k)],
                 budget_cny=dict(task=2,day=10,month=100),
                 production_active=False,note='Presence checks only; authorization and read-back are separate tests.')

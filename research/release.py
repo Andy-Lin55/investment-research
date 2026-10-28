@@ -28,7 +28,7 @@ def release_candidate(task,store,drive,reports,*,enabled=False,accepted_model_ve
         raise ValueError('verified private workpapers required')
     path=task['company_path']+'/research-current.json';key=task['publication_key']+':formal'
     value=dict(model_version=accepted_model_version,publication_key=key,
-               workpaper=task['checkpoints']['result'],publication_status='pending_notion')
+               workpaper=task['checkpoints']['result'],model=task['checkpoints'].get('model'),publication_status='pending_notion')
     try:
         try:
             raw,meta=drive.read(path);old=json.loads(raw)

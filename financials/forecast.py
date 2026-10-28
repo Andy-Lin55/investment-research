@@ -22,6 +22,9 @@ def number(value):
 
 def project(baseline, scenarios, *, as_of, previous=None):
     baseline, scenarios = deepcopy(baseline), deepcopy(scenarios)
+    if (baseline.get('amount_unit')!=baseline.get('currency') or baseline.get('share_unit')!='shares'
+            or baseline.get('amount_scale',1)!=1 or baseline.get('share_scale',1)!=1):
+        raise ValueError('explicit raw currency amount units and unscaled share counts required')
     cutoff, end = date.fromisoformat(as_of), date.fromisoformat(baseline['period_end'])
     if (baseline.get('sector_template','industrial') != 'industrial' or end > cutoff
             or (end.month,end.day)!=(12,31) or baseline.get('cash_scope_confirmed') is not True

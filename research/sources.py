@@ -123,11 +123,14 @@ def download_primary(url):
 
 
 def extract(data,*,kind,max_chars=100000):
-    pages=[]
+    pages=[];total_pages=1;substantive=0
     if kind=='pdf':
         import fitz
         with fitz.open(stream=data,filetype='pdf') as doc:
-            pages=[f'[PDF page {i+1}]\n'+page.get_text() for i,page in enumerate(doc)]
+            total_pages=len(doc)
+            for i,page in enumerate(doc):
+                text=page.get_text().strip();substantive+=len(text)
+                if text:pages.append(f'[PDF page {i+1}]\n'+text)
     elif kind=='docx':
         with zipfile.ZipFile(io.BytesIO(data)) as z:
             pages=['[DOCX body]\n'+''.join(ET.fromstring(z.read('word/document.xml')).itertext())]
@@ -145,7 +148,9 @@ def extract(data,*,kind,max_chars=100000):
             for node in soup(['script','style','nav','header','footer']):node.decompose()
             text=soup.get_text('\n',strip=True)
         pages=[text]
-    full='\n\n'.join(pages)
-    return dict(text=full[:max_chars],partial=len(full)>max_chars,total_pages=len(pages),
+    full='\n\n'.join(pages).strip()
+    if kind!='pdf':substantive=len(full)
+    return dict(text=full[:max_chars].strip(),partial=len(full)>max_chars,total_pages=total_pages if kind=='pdf' else len(pages),
+                substantive_characters=substantive,
                 extracted_characters=len(full),included_characters=min(len(full),max_chars),
                 note='Full original retained separately. Extracted/cached text is not manual verification.')

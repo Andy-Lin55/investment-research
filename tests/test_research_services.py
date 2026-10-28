@@ -56,3 +56,10 @@ def test_roster_matches_exact_listing_and_never_silently_drops_active_holdings()
     m=api();registry=[dict(issuer_id='a',tickers=['A'],company_path='投资/A',identity_confirmed=True)]
     r=m.match_roster(['A','B'],registry)
     assert len(r['holdings'])==1;assert r['unmapped']==['B'];assert r['complete'] is False
+
+
+def test_local_authorization_cache_counts_as_present_without_printing_token(tmp_path):
+    cache=tmp_path/'.research-graph-token.json';cache.write_text('{"refresh_token":"private-secret"}')
+    result=api().doctor({'ONEDRIVE_TOKEN_CACHE':str(cache)})
+    assert 'ONEDRIVE_REFRESH_TOKEN' not in result['missing']
+    assert 'private-secret' not in json.dumps(result)

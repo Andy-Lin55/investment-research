@@ -16,7 +16,10 @@ def test_local_worker_writes_candidate_only_and_defers_exhausted_subscription(mo
     t['input_fingerprint']='fp';t['checkpoints']['request']={'path':'投资/A/request.json'};store.put(t)
     class Drive:
         def __init__(self):self.writes=[]
-        def read(self,path):return json.dumps(dict(task_id=t['task_id'],input_fingerprint='fp',prompt='evidence',response_path='投资/A/subscription-response.json')).encode(),{}
+        def read(self,path):
+            from research.delivery import ServiceError
+            if not path.endswith('request.json'):raise ServiceError(404)
+            return json.dumps(dict(task_id=t['task_id'],input_fingerprint='fp',prompt='evidence',response_path='投资/A/subscription-response.json')).encode(),{}
         def put_immutable(self,path,data):self.writes.append(path);return dict(verified=True,path=path)
     d=Drive();r=api().run_local_queue(store,d,limit=1,subscription=lambda _:'')
     assert r['waiting_subscription']==1;assert d.writes==[]

@@ -4,6 +4,7 @@ import hashlib,json,re
 from pathlib import PurePosixPath
 
 from financials.forecast import digest,project
+from research.delivery import ServiceError
 from research.sources import extract
 
 
@@ -66,7 +67,18 @@ def prepare_task_context(task,store,drive,http,holding):
         if not path.startswith(root+'/') or '..' in PurePosixPath(path).parts:raise ValueError('forecast input outside company')
         try:
             inputs=json.loads(drive.read(path)[0])
-            model=project(inputs['baseline'],inputs['scenarios'],as_of=inputs['as_of'])
+            previous=None;expected=task.get('baseline_version')
+            if expected is not None:
+                pointer=json.loads(drive.read(root+'/research-current.json')[0])
+                if pointer.get('model_version')!=expected:raise ValueError('prior baseline version changed')
+                ref=pointer.get('model') or pointer.get('workpaper')
+                if not ref or not ref['path'].startswith(root+'/') or '..' in PurePosixPath(ref['path']).parts:
+                    raise ValueError('prior model reference missing or outside company')
+                prior=json.loads(drive.read(ref['path'])[0])
+                previous=prior.get('model_snapshot',prior)
+                if not previous or previous.get('model_version')!=expected:raise ValueError('prior model version differs')
+                if prior.get('report'):task['previous_report']=prior['report']
+            model=project(inputs['baseline'],inputs['scenarios'],as_of=inputs['as_of'],previous=previous)
             if model['issuer_id']!=holding['issuer_id']:raise ValueError('forecast issuer mismatch')
         except Exception as error:gaps.append('forecast_inputs_invalid:'+type(error).__name__)
     else:gaps.append('forecast_inputs_not_configured')

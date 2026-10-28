@@ -15,7 +15,7 @@ STATES=('pending','pending_evidence','retry_delivery','retry_provider','budget_b
         'pending_model','pending_usage_verification','quality_blocked','completed','baseline_conflict',
         'provider_attempts_exhausted','pending_report_confirmation','waiting_subscription','candidate_ready',
         'superseded_source_resolved','evidence_only','pending_context','pending_model_provenance',
-        'pending_budget_reconciliation')
+        'pending_budget_reconciliation','pending_attempt_confirmation','pending_model_refresh','retry_release','published')
 
 
 def pages(http,source,body=None):
@@ -41,6 +41,13 @@ def notion_http(env):
                                          'Notion-Version':'2025-09-03','Content-Type':'application/json'})
 
 
+def ensure_pilot_schema(http,source,schema):
+    """Only add missing properties in this helper's dedicated pilot databases."""
+    existing=http('GET','/data_sources/'+source)['properties']
+    missing={k:v for k,v in schema.items() if k not in existing}
+    if missing:http('PATCH','/data_sources/'+source,body={'properties':missing})
+
+
 def setup_notion(http,parent):
     """Create/reuse a dedicated pilot workspace; no production schema edits."""
     title='持仓研究升级｜隔离试运行'
@@ -60,6 +67,7 @@ def setup_notion(http,parent):
            'HumanReview':{'select':{'options':[{'name':s} for s in ('待看','已确认','有疑问','已纠正')]}},
            'Category':{'select':{'options':[{'name':s} for s in ('trading_flows','fundamentals','policy','unclassified')]}},
            'Subtype':{'rich_text':{}},'Source':{'url':{}},'Published':{'date':{}},'Missing':{'rich_text':{}}}
+    tasks['RetryRequested']={'checkbox':{}}
     reports={'Name':{'title':{}},'Ticker':{'rich_text':{}},'TriggerEventID':{'rich_text':{}},
              'DocType':{'select':{'options':[{'name':'AI深度分析'}]}},'CoreThesis':{'rich_text':{}},
              'Analyst':{'rich_text':{}},'Broker':{'rich_text':{}}}
@@ -73,6 +81,7 @@ def setup_notion(http,parent):
             'is_inline':True,'initial_data_source':{'properties':schema}})
         if len(db['data_sources'])!=1:raise ValueError('ambiguous pilot data source')
         result[key]=db['data_sources'][0]['id']
+        if existing:ensure_pilot_schema(http,result[key],schema)
     return result
 
 
@@ -149,7 +158,8 @@ def scan(roster,store,drive,*,start,end):
                 kind='manual' if dt=='公告' else 'mandatory_event'
                 task=enqueue(store,event,h,kind=kind)
                 if kind=='manual':task['status']='evidence_only';store.put(task);continue
-                if task['status'] in {'completed','superseded_source_resolved'}:continue
+                # A resolved discovery record does not prove that a document
+                # served under the same source ID/URL is still unchanged.
                 try:
                     raw=sources.download_primary(row['url'])
                     extension='pdf' if raw.startswith(b'%PDF') else 'html'
@@ -185,6 +195,17 @@ def weekly(roster,store,*,day,slots):
         task=enqueue(store,event,h,kind='weekly_deep',week=day)
         task['needs_context']=True;store.put(task)
     return dict(screened=len(plan['screened']),deep=len(plan['deep']),deferred=len(plan['deferred']),coverage_gaps=len(roster['unmapped']))
+
+
+def select_tasks(tasks,active_issuers,*,limit,day):
+    runnable={'pending','retry_delivery','retry_provider','waiting_subscription'}
+    selected=[]
+    for task in tasks:
+        if task['issuer_id'] not in active_issuers or task['status'] in {'retry_release','published','completed','superseded_source_resolved','evidence_only'}:continue
+        eligible=task['status'] in runnable or task.get('retry_requested') is True
+        if task['status']=='budget_blocked' and task.get('blocked_on_day')!=day:eligible=True
+        if eligible:selected.append(task)
+    return sorted(selected,key=lambda t:(t.get('priority',2),t.get('last_attempted_at') or t['created_at'],t['created_at']))[:limit]
 
 
 def main(argv=None):
@@ -228,22 +249,22 @@ def main(argv=None):
                 result['feed_cards']=feed_result['cards'];result['coverage_gaps']+=feed_result['coverage_gaps']
             elif args.mode=='local':
                 from research.local import run_local_queue
-                result=run_local_queue(store,drive,limit=args.limit)
+                result=run_local_queue(store,drive,limit=args.limit,subscription_config={
+                    'cli_path':env.get('CODEX_CLI_PATH'),'model':env.get('CODEX_MODEL')})
             else:
                 from research.context import prepare_task_context
                 reports=NotionReports(http,env['RESEARCH_NOTION_REPORTS_SOURCE_ID']);providers=configured_providers(env)
                 result={};mapped={h['issuer_id']:h for h in roster['holdings']}
-                tasks=sorted(store.list(),key=lambda t:(t.get('priority',2),t['created_at']))
-                tasks=[t for t in tasks if t['status'] not in {'completed','superseded_source_resolved','evidence_only'}]
-                for task in tasks[:args.limit]:
-                    if task['issuer_id'] not in mapped:
-                        result['inactive_or_unmapped']=result.get('inactive_or_unmapped',0)+1;continue
+                tasks=select_tasks(store.list(),set(mapped),limit=args.limit,day=day)
+                for task in tasks:
+                    task['last_attempted_at']=datetime.now(timezone.utc).isoformat()
+                    task['retry_requested']=False;store.put(task)
                     model=prepare_task_context(task,store,drive,http,mapped[task['issuer_id']])
                     outcome=process(task['task_id'],store=store,drive=drive,reports=reports,providers=providers,
                                     budget=Budget(store),day=day,model=model)
                     result[outcome['status']]=result.get(outcome['status'],0)+1
         print(json.dumps(result))
-        blocked=any(v for k,v in result.items() if k not in {'completed','waiting_subscription','candidates','screened','deep','deferred','scanned','queued','feed_cards'})
+        blocked=any(v for k,v in result.items() if k not in {'completed','waiting_subscription','candidates','reused_candidates','screened','deep','deferred','scanned','queued','feed_cards'})
         return 1 if blocked else 0
     except Exception as error:
         print('Research operation incomplete: '+type(error).__name__+'; private details omitted',file=sys.stderr);return 2

@@ -25,6 +25,32 @@ def test_transport_rejects_arbitrary_upload_hosts_and_credentialed_urls():
     with pytest.raises(ValueError):h('GET','https://name:secret@graph.microsoft.com/v1.0/me')
 
 
+def test_personal_onedrive_upload_host_never_receives_graph_credentials(monkeypatch):
+    import requests
+    seen=[]
+    def request(method,url,**kwargs):
+        seen.append((method,url,kwargs))
+        return type('Response',(),{'status_code':201,'content':b'{}','json':lambda self:{}})()
+    monkeypatch.setattr(requests,'request',request)
+    h=api().HTTP('https://graph.microsoft.com/v1.0',{'Authorization':'Bearer private'})
+    h('PUT','https://my.microsoftpersonalcontent.com/personal/test/uploadSession?test=synthetic',
+      body=b'synthetic',authenticated=False)
+    assert len(seen)==1
+    assert 'Authorization' not in seen[0][2]['headers']
+    assert seen[0][2]['allow_redirects'] is False
+
+
+@pytest.mark.parametrize('url,authenticated',[
+    ('https://my.microsoftpersonalcontent.com/upload',True),
+    ('https://my.microsoftpersonalcontent.com.evil.invalid/upload',False),
+    ('https://evil-microsoftpersonalcontent.com/upload',False),
+    ('https://name:secret@my.microsoftpersonalcontent.com/upload',False),
+])
+def test_personal_onedrive_upload_rejects_bearer_forwarding_and_lookalikes(url,authenticated):
+    h=api().HTTP('https://graph.microsoft.com/v1.0',{'Authorization':'Bearer private'})
+    with pytest.raises(ValueError):h('PUT',url,body=b'synthetic',authenticated=authenticated)
+
+
 def test_token_refresh_persists_rotated_token_and_does_not_return_refresh_secret():
     saved=[]
     def post(path,body):

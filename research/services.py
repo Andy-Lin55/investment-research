@@ -17,7 +17,8 @@ class HTTP:
         parts=urlsplit(url);host=parts.hostname or ''
         if parts.scheme!='https' or parts.username or parts.password:raise ValueError('credential-free HTTPS required')
         if absolute:
-            allowed=(host in {'api.onedrive.com','onedrive.live.com'} or any(host.endswith(s) for s in
+            # Personal drives migrated by Microsoft return this upload-session host.
+            allowed=(host in {'api.onedrive.com','onedrive.live.com','my.microsoftpersonalcontent.com'} or any(host.endswith(s) for s in
                      ('.1drv.com','.storage.live.com','.sharepoint.com','.onedrive.com')))
             if authenticated or not allowed:raise ValueError('untrusted upload/download destination')
         request_headers=dict(self.headers if authenticated else {});request_headers.update(headers or {})

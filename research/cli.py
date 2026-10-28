@@ -126,14 +126,19 @@ def registry(env,drive=None):
     return json.loads(drive.read('投资/持仓研究配置/issuers.json')[0])
 
 
-def active_roster(http,env,reg):
+def active_records(http,env):
     source=env.get('RESEARCH_UNIVERSE_SOURCE_ID') or source_id(http,env['NOTION_UNIVERSE_DB_ID'])
-    tickers=[]
+    records=[]
     for page in pages(http,source,{'filter':{'property':'Status','select':{'equals':'Active'}}}):
         ticker=plain(page['properties']['Ticker']['rich_text'])
         if not ticker:raise ValueError('Active listing has no ticker')
-        tickers.append(ticker)
-    return match_roster(tickers,reg)
+        titles=[plain(p.get('title',[])) for p in page['properties'].values() if 'title' in p]
+        records.append(dict(ticker=ticker,name=next(iter(titles),''),notion_url=page.get('url')))
+    return records
+
+
+def active_roster(http,env,reg):
+    return match_roster([r['ticker'] for r in active_records(http,env)],reg)
 
 
 def scan(roster,store,drive,*,start,end):
@@ -210,7 +215,7 @@ def select_tasks(tasks,active_issuers,*,limit,day):
 
 def main(argv=None):
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('mode',nargs='?',default='doctor',choices=['doctor','scan','worker','weekly','local','notion-setup','backup','restore'])
+    parser.add_argument('mode',nargs='?',default='doctor',choices=['doctor','inventory','scan','worker','weekly','local','notion-setup','backup','restore'])
     parser.add_argument('--write',action='store_true');parser.add_argument('--env-file',type=Path)
     parser.add_argument('--parent');parser.add_argument('--output',type=Path);parser.add_argument('--source',type=Path)
     parser.add_argument('--limit',type=int,default=3);parser.add_argument('--slots',type=int,default=3)
@@ -219,6 +224,18 @@ def main(argv=None):
         from dotenv import dotenv_values
         env.update({k:v for k,v in dotenv_values(args.env_file).items() if v is not None})
     if args.mode=='doctor':print(json.dumps(doctor(env)));return 0
+    if args.mode=='inventory':
+        try:
+            from research.coverage import build_inventory,export_inventory
+            if not args.source or not args.output:raise ValueError('inventory source and private output required')
+            result=build_inventory(active_records(notion_http(env),env),registry(env),args.source,
+                observed_at=datetime.now(timezone(timedelta(hours=8))).date().isoformat(),
+                feeds=json.loads(env.get('RESEARCH_OFFICIAL_FEEDS_JSON','[]')))
+            export_inventory(result,args.output)
+            print(json.dumps({k:result[k] for k in ('active_listings','confirmed_listings','directory_scan_truncated')}))
+            return 0
+        except Exception as error:
+            print('Inventory incomplete: '+type(error).__name__+'; private details omitted',file=sys.stderr);return 2
     if not args.write:print(json.dumps(dict(mode=args.mode,written=False,reason='Explicit --write required')));return 0
     if args.mode not in {'notion-setup','backup','restore'} and env.get('HOLDINGS_RESEARCH_ENABLED')!='true':
         print('Holdings research disabled; no side effects',file=sys.stderr);return 2

@@ -5,7 +5,7 @@ import json,time,re
 
 from financials.forecast import digest,number,project
 from research.delivery import ServiceError
-from research.runtime import (BudgetBlocked,VersionConflict,assert_baseline,research_prompt,validate_report)
+from research.runtime import (BudgetBlocked,VersionConflict,assert_baseline,research_prompt,validate_report,DELIVERY_RECOVERY_STATES)
 
 
 def encoded(value):return json.dumps(value,ensure_ascii=False,sort_keys=True,allow_nan=False).encode()
@@ -16,6 +16,9 @@ def process(task_id,*,store,drive,reports,providers,budget,day,model=None,follow
     if not task:raise ValueError('unknown durable task')
     if task['status'] in {'retry_release','published'}:return task
     fingerprint=digest([task['card']['revision_id'],task.get('context_digest'),model,'holdings-v1'])
+    if (task.get('input_fingerprint') and task['input_fingerprint']!=fingerprint
+            and task.get('checkpoints') and task['status'] in DELIVERY_RECOVERY_STATES):
+        task['status']='pending_input_reconciliation';store.put(task);return task
     if task.get('input_fingerprint')!=fingerprint:
         task.update(input_fingerprint=fingerprint,publication_key=task_id+':'+fingerprint,
                     analysis=None,checkpoints={},status='pending')

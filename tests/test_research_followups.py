@@ -117,3 +117,27 @@ def test_weekly_review_prioritizes_due_questions_over_issuer_alphabetical_order(
     result=weekly({'holdings':[a,b],'unmapped':[]},s,day='2026-10-28',slots=1,followups=Followups())
     assert result['screened']==2
     assert [t['issuer_id'] for t in s.list()]==['b-issuer']
+
+
+def test_human_summary_corrections_enter_context_without_rewriting_identity():
+    http=Notion();f=api().NotionFollowups(http,'pilot-followups')
+    s=MemoryStore();t=enqueue(s,event(),holding());t['publication_key']='old-publication'
+    item=api().items_from_report(t,report(t['card']['revision_id']))[0]
+    receipt=f.ensure(item,report_ref={})
+    http.rows[receipt['id']]['properties']['Summary']={'rich_text':[{'text':{'content':'人工纠正：先复核收购资金来源'}}]}
+    out=f.unresolved(t['issuer_id'])[0]
+    assert out['human_summary']=='人工纠正：先复核收购资金来源'
+    assert out['key']==item['key']
+
+
+def test_incomplete_delivery_reuses_frozen_context_until_channel_reconciles():
+    from research.context import prepare_task_context
+    m,s,t,d,r,p=setup()
+    out=m.process(t['task_id'],store=s,drive=d,reports=r,providers=[p],budget=Budget(s),day='2026-10-27')
+    assert out['status']=='retry_delivery';frozen=out.get('context_digest')
+    class Followups:
+        def unresolved(self,issuer):return [dict(key='prior-item',human_notes='new human edit',origin_task='earlier')]
+    prepare_task_context(out,s,d,None,holding(),followups=Followups())
+    assert s.get(t['task_id']).get('context_digest')==frozen
+    final=m.process(t['task_id'],store=s,drive=d,reports=r,providers=[p],budget=Budget(s),day='2026-10-27')
+    assert final['status']=='pending_model';assert p.calls==1;assert r.count==1

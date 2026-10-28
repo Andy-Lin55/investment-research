@@ -16,7 +16,7 @@ STATES=('pending','pending_evidence','retry_delivery','retry_provider','budget_b
         'provider_attempts_exhausted','pending_report_confirmation','waiting_subscription','candidate_ready',
         'superseded_source_resolved','evidence_only','pending_context','pending_model_provenance',
         'pending_budget_reconciliation','pending_attempt_confirmation','pending_model_refresh','retry_release','published')
-STATES=STATES+('pending_followup_confirmation',)
+STATES=STATES+('pending_followup_confirmation','pending_input_reconciliation')
 
 
 def pages(http,source,body=None):

@@ -12,6 +12,9 @@ from research.evidence import build_card
 class BudgetBlocked(RuntimeError):pass
 class VersionConflict(RuntimeError):pass
 
+DELIVERY_RECOVERY_STATES=frozenset({'retry_delivery','pending_report_confirmation',
+                                   'pending_followup_confirmation','pending_input_reconciliation'})
+
 
 class MemoryStore:
     """Synthetic-test store; never a cloud queue."""

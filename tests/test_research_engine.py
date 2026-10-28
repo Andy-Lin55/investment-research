@@ -139,3 +139,14 @@ def test_same_forecast_with_different_comparison_history_keeps_both_workpapers()
     assert second['status']=='pending_model'
     assert first['checkpoints']['model']['path']!=second['checkpoints']['model']['path']
     assert first['checkpoints']['model_workbook']['path']!=second['checkpoints']['model_workbook']['path']
+
+
+def test_changed_inputs_cannot_clear_uncertain_publication_journal():
+    parts=setup();first=run(parts)
+    assert first['status']=='retry_delivery'
+    old_fingerprint=first['input_fingerprint'];first['context_digest']='human-note-changed'
+    parts[1].put(first);out=run(parts)
+    assert out['status']=='pending_input_reconciliation'
+    assert out['input_fingerprint']==old_fingerprint
+    assert out['checkpoints']['report_attempted'] is True
+    assert parts[-1].calls==1;assert parts[-2].count==1

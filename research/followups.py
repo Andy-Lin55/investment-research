@@ -57,6 +57,7 @@ class NotionFollowups:
         due=(p.get('Due',{}).get('date') or {}).get('start')
         if due:date.fromisoformat(due[:10])
         return dict(item,state=state,due=due[:10] if due else None,
+                    human_summary=plain(p.get('Summary',{}).get('rich_text',[])),
                     human_notes=plain(p.get('HumanNotes',{}).get('rich_text',[])),url=page.get('url'))
 
     def ensure(self,item,*,report_ref,lookup_only=False):

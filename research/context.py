@@ -6,6 +6,7 @@ from pathlib import PurePosixPath
 from financials.forecast import digest,project
 from research.delivery import ServiceError
 from research.sources import extract
+from research.runtime import DELIVERY_RECOVERY_STATES
 
 
 def notion_text(http,page_id,*,max_blocks=400):
@@ -35,6 +36,21 @@ def notion_text(http,page_id,*,max_blocks=400):
 
 def prepare_task_context(task,store,drive,http,holding,*,followups=None):
     task=store.get(task['task_id']);context=[];gaps=[];root=holding['company_path'].rstrip('/')
+    if (task.get('input_fingerprint') and task.get('checkpoints')
+            and task['status'] in DELIVERY_RECOVERY_STATES):
+        if task['company_path']!=root:raise ValueError('company mapping changed during delivery')
+        # Finish the outstanding publication with the corpus it actually used.
+        # Human edits are read on the next independent research publication.
+        if task.get('analysis'):return deepcopy(task['analysis'].get('model_snapshot'))
+        ref=task['checkpoints'].get('model')
+        if ref:
+            path=ref['path']
+            if not path.startswith(root+'/') or '..' in PurePosixPath(path).parts:raise ValueError('model checkpoint outside company')
+            raw=drive.read(path)[0]
+            if ref.get('verified') is not True or ref.get('sha256') and hashlib.sha256(raw).hexdigest()!=ref['sha256']:
+                raise ValueError('model checkpoint read-back differs')
+            return json.loads(raw)
+        return None
     if followups is not None:
         try:
             # The current task's delivery cannot change its own input fingerprint.

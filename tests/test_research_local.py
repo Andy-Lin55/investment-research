@@ -7,7 +7,11 @@ def api():
     try:return importlib.import_module('research.local')
     except ModuleNotFoundError:pytest.fail('Subscription-only queue worker is not implemented')
 
-def test_local_worker_writes_candidate_only_and_defers_exhausted_subscription():
+def test_local_worker_writes_candidate_only_and_defers_exhausted_subscription(monkeypatch):
+    # This test models a local machine using a stub subscription. Keep the
+    # separate CI prohibition test active under the real runner environment.
+    monkeypatch.delenv('CI',raising=False)
+    monkeypatch.delenv('GITHUB_ACTIONS',raising=False)
     store=MemoryStore();t=enqueue(store,event(),holding(),kind='weekly_deep',week='2026-10-24')
     t['input_fingerprint']='fp';t['checkpoints']['request']={'path':'投资/A/request.json'};store.put(t)
     class Drive:

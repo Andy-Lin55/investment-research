@@ -5,17 +5,20 @@ import json,time,re
 
 from financials.forecast import digest,number,project
 from research.delivery import ServiceError
-from research.runtime import (BudgetBlocked,VersionConflict,assert_baseline,research_prompt,validate_report)
+from research.runtime import (BudgetBlocked,VersionConflict,assert_baseline,research_prompt,validate_report,DELIVERY_RECOVERY_STATES)
 
 
 def encoded(value):return json.dumps(value,ensure_ascii=False,sort_keys=True,allow_nan=False).encode()
 
 
-def process(task_id,*,store,drive,reports,providers,budget,day,model=None):
+def process(task_id,*,store,drive,reports,providers,budget,day,model=None,followups=None):
     task=store.get(task_id)
     if not task:raise ValueError('unknown durable task')
     if task['status'] in {'retry_release','published'}:return task
     fingerprint=digest([task['card']['revision_id'],task.get('context_digest'),model,'holdings-v1'])
+    if (task.get('input_fingerprint') and task['input_fingerprint']!=fingerprint
+            and task.get('checkpoints') and task['status'] in DELIVERY_RECOVERY_STATES):
+        task['status']='pending_input_reconciliation';store.put(task);return task
     if task.get('input_fingerprint')!=fingerprint:
         task.update(input_fingerprint=fingerprint,publication_key=task_id+':'+fingerprint,
                     analysis=None,checkpoints={},status='pending')
@@ -47,9 +50,12 @@ def process(task_id,*,store,drive,reports,providers,budget,day,model=None):
     except VersionConflict as error:return state('baseline_conflict',error)
     except Exception as error:return state('retry_delivery',error)
     version=root+'/04_研究底稿/'+task_id+'/'+fingerprint
+    # A forecast identity excludes comparison history. Preserve each comparison
+    # snapshot as a distinct immutable workpaper rather than colliding by model ID.
+    model_path=root+'/03_财务模型/候选/'+model['model_version']+'/'+digest(model) if model is not None else None
     if model is not None and 'model' not in task['checkpoints']:
         try:
-            ref=drive.put_immutable(root+'/03_财务模型/候选/'+model['model_version']+'.json',encoded(model))
+            ref=drive.put_immutable(model_path+'.json',encoded(model))
             if ref.get('verified') is not True:raise ValueError('model upload not verified')
             task['checkpoints']['model']=ref
             store.put(task)
@@ -57,7 +63,7 @@ def process(task_id,*,store,drive,reports,providers,budget,day,model=None):
     if model is not None and 'model_workbook' not in task['checkpoints']:
         try:
             from financials.workbook import export_model
-            ref=drive.put_immutable(root+'/03_财务模型/候选/'+model['model_version']+'.xlsx',export_model(model))
+            ref=drive.put_immutable(model_path+'.xlsx',export_model(model))
             if ref.get('verified') is not True:raise ValueError('model workbook not verified')
             task['checkpoints']['model_workbook']=ref;store.put(task)
         except Exception as error:return state('retry_delivery',error)
@@ -155,6 +161,20 @@ def process(task_id,*,store,drive,reports,providers,budget,day,model=None):
             if not page:return state('pending_report_confirmation')
             task['checkpoints']['report']=page;store.put(task)
         except Exception as error:return state('retry_delivery',error)
+    if followups is not None:
+        from research.followups import items_from_report
+        for item in items_from_report(task,task['analysis']['report']):
+            receipts=task['checkpoints'].setdefault('followups',{})
+            if item['key'] in receipts:continue
+            attempted=task['checkpoints'].setdefault('followups_attempted',[])
+            uncertain=item['key'] in attempted
+            if not uncertain:attempted.append(item['key']);store.put(task)
+            try:
+                receipt=followups.ensure(item,report_ref=task['checkpoints']['report'],lookup_only=uncertain)
+                if receipt is None:return state('pending_followup_confirmation')
+                if receipt.get('verified') is not True:raise ValueError('follow-up not verified')
+                receipts[item['key']]=receipt;store.put(task)
+            except Exception as error:return state('retry_delivery',error)
     # A delivered facts notice is not completion of mandatory model research.
     if task['analysis'].get('model_provenance')=='unreported':return state('pending_model_provenance')
     if task.get('context_gaps') and task['analysis']['validation']['status']=='ready_for_review':return state('pending_context')

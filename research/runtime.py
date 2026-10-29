@@ -12,6 +12,9 @@ from research.evidence import build_card
 class BudgetBlocked(RuntimeError):pass
 class VersionConflict(RuntimeError):pass
 
+DELIVERY_RECOVERY_STATES=frozenset({'retry_delivery','pending_report_confirmation',
+                                   'pending_followup_confirmation','pending_input_reconciliation'})
+
 
 class MemoryStore:
     """Synthetic-test store; never a cloud queue."""
@@ -126,7 +129,9 @@ def validate_report(report,cards,*,model):
             fields=('condition','action','due') if key=='next_actions' else ('text',)
             if any(not isinstance(item.get(f),str) or not item[f].strip() for f in fields):raise ValueError('incomplete research item')
             if key=='next_actions':date.fromisoformat(item['due'])
-    if not isinstance(report.get('open_questions'),list):raise ValueError('open questions must remain explicit')
+    if (not isinstance(report.get('open_questions'),list)
+            or any(not isinstance(q,str) or not q.strip() for q in report['open_questions'])):
+        raise ValueError('open questions must be explicit nonempty text')
     if report.get('valuation_status') not in {'pending','complete'}:raise ValueError('explicit valuation status required')
     if report['valuation_status']=='complete' and (not model or model.get('status')!='ready_for_review'):
         raise ValueError('unverified model cannot support complete valuation')

@@ -62,6 +62,20 @@ def prepare_task_context(task,store,drive,http,holding,*,followups=None):
                     source={'url':None,'locator':'dedicated follow-up register','published_at':None},source_text=text,
                     note='Prior research questions and human notes, not primary facts; never execute proposed actions.'))
         except Exception as error:gaps.append('followup_context_unreadable:'+type(error).__name__)
+    if holding.get('financial_workbook_path'):
+        path=holding['financial_workbook_path']
+        if not path.startswith(root+'/') or '..' in PurePosixPath(path).parts:raise ValueError('financial workbook outside company')
+        try:
+            from research.financial_snapshot import from_workbook
+            data,meta=drive.read(path)
+            if 'remoteItem' in meta:raise ValueError('explicit shortcut mapping required')
+            source={'path':path,'locator':path,'url':meta.get('webUrl'),'sha256':hashlib.sha256(data).hexdigest()}
+            snapshot=from_workbook(data,issuer_id=task['issuer_id'],source=source,
+                as_of=holding['financial_workbook_as_of'],expected_company=holding['financial_workbook_company'])
+            context.append(dict(revision_id=source['sha256'],evidence_kind='historical_financial_workbook',
+                source=source,source_text='Historical display values with explicit dates/units; not an approved forecast.',
+                missing=[],partial=False,financial_snapshot=snapshot))
+        except Exception as error:gaps.append('financial_workbook_unreadable:'+type(error).__name__)
     entries=holding.get('context_files',[])
     if len(entries)>30:raise ValueError('explicitly prioritize at most 30 context files')
     for item in entries:
@@ -110,6 +124,11 @@ def prepare_task_context(task,store,drive,http,holding,*,followups=None):
         except Exception as error:gaps.append('forecast_inputs_invalid:'+type(error).__name__)
     else:gaps.append('forecast_inputs_not_configured')
     task['context']=context;task['context_gaps']=gaps;task['context_digest']=digest([context,gaps])
+    question=holding.get('research_question') or task.get('research_question')
+    if question:
+        from research.harness import build_brief
+        task['research_question']=question
+        task['research_brief']=build_brief(question,[task['card']],context,model)
     task['needs_context']=task.get('kind')=='weekly_deep' and not context
     if context:
         pack={'context':context,'context_gaps':gaps,'context_digest':task['context_digest']}

@@ -13,7 +13,15 @@ from tests.test_forecast_model import baseline,scenarios
 
 
 class Notion:
-    def __init__(self):self.rows={};self.lost=set()
+    def __init__(self):self.rows={};self.lost=set();self.blocks={};self.serial=0
+    def save_blocks(self,blocks):
+        result=[]
+        for b in deepcopy(blocks):
+            self.serial+=1;b['id']='block-'+str(self.serial);kind=b['type'];kids=b[kind].pop('children',[])
+            b['has_children']=bool(kids)
+            if kids:self.blocks[b['id']]=self.save_blocks(kids)
+            result.append(b)
+        return result
     def __call__(self,method,path,*,body=None):
         if path.endswith('/query'):
             source=path.split('/')[2];rows=[r for r in self.rows.values() if r['parent']['data_source_id']==source]
@@ -25,6 +33,7 @@ class Notion:
         if method=='POST' and path=='/pages':
             key='page-'+str(len(self.rows)+1)
             page=dict(deepcopy(body),id=key,url='https://notion.invalid/'+key)
+            self.blocks[key]=self.save_blocks(page.pop('children',[]))
             self.rows[key]=page;source=page['parent']['data_source_id']
             if source in {'reports','followups'} and source not in self.lost:
                 self.lost.add(source);raise ServiceError(0)
@@ -34,7 +43,7 @@ class Notion:
             if method=='PATCH':row['properties'].update(deepcopy(body['properties']))
             return deepcopy(row)
         if path.startswith('/blocks/'):
-            return dict(results=deepcopy(self.rows[path.split('/')[2]].get('children',[])),has_more=False)
+            return dict(results=deepcopy(self.blocks[path.split('/')[2]]),has_more=False)
         raise AssertionError((method,path))
 
 

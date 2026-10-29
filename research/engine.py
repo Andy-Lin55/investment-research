@@ -156,6 +156,11 @@ def process(task_id,*,store,drive,reports,providers,budget,day,model=None,follow
         except Exception as error:return state('retry_delivery',error)
     if 'report' not in task['checkpoints']:
         uncertain=task['checkpoints'].get('report_attempted',False)
+        if not uncertain and task.get('presentation_version')==2:
+            try:
+                from research.report_view import render
+                render(task,task['analysis'],task['checkpoints'])
+            except Exception as error:return state('retry_delivery',error)
         task['checkpoints']['report_attempted']=True;store.put(task)
         try:
             page=reports.publish(task,task['analysis'],task['checkpoints'],candidate=True,lookup_only=uncertain)

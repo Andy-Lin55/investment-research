@@ -45,3 +45,15 @@ def test_changed_nested_financial_cell_prevents_success_receipt():
     t,a=fixture();http=HTTP();p=NotionReports(http,'reports');p.publish(t,a,{})
     http.tamper=True
     with pytest.raises(DeliveryError):p.publish(t,a,{})
+
+
+def test_readback_accepts_equivalent_root_slash_but_rejects_changed_link_query():
+    from research.notion_report_verify import canonical
+    from research.report_view import block,rich
+    expected=block('paragraph','source')
+    expected['paragraph']['rich_text']=rich('source',url='https://onedrive.invalid?file=123')
+    actual=deepcopy(expected)
+    actual['paragraph']['rich_text'][0]['text']['link']['url']='https://onedrive.invalid/?file=123'
+    assert canonical([actual])==canonical([expected])
+    actual['paragraph']['rich_text'][0]['text']['link']['url']='https://onedrive.invalid/?file=456'
+    assert canonical([actual])!=canonical([expected])

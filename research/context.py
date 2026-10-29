@@ -128,7 +128,8 @@ def prepare_task_context(task,store,drive,http,holding,*,followups=None):
     if question:
         from research.harness import build_brief
         task['research_question']=question
-        task['research_brief']=build_brief(question,[task['card']],context,model)
+        card=dict(task['card'],extraction=task.get('evidence',{}).get('extraction') or {})
+        task['research_brief']=build_brief(question,[card],context,model)
     task['needs_context']=task.get('kind')=='weekly_deep' and not context
     if context:
         pack={'context':context,'context_gaps':gaps,'context_digest':task['context_digest']}

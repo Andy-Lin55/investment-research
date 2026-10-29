@@ -1,7 +1,9 @@
 """Native Notion report blocks, readable citations and inline financial tables."""
 import json,re
+from collections import Counter
 from urllib.parse import urlsplit
 from financials.forecast import number
+from research.harness import evidence_role
 
 
 def rich(text,*,url=None,bold=False):
@@ -23,21 +25,23 @@ def value(v):return '—' if v is None else f'{v:,.2f}' if number(v) else str(v)
 
 
 def visible_periods(periods):
-    if len(periods)<=5:return list(range(len(periods)))
-    annual=[i for i,p in enumerate(periods) if '年度A' in p or '-12-31期末A' in p]
-    interim=[i for i in range(len(periods)) if i not in annual]
+    def end(i):return periods[i][:4]+'-12-31' if '年度A' in periods[i] else periods[i][:10]
+    ordered=sorted(range(len(periods)),key=end)
+    if len(periods)<=5:return ordered
+    annual=[i for i in ordered if '年度A' in periods[i] or '-12-31期末A' in periods[i]]
+    interim=[i for i in ordered if i not in annual]
     selected=annual[-2:]+interim[-2:]
     if interim:
         latest=periods[interim[-1]];previous=str(int(latest[:4])-1)+latest[4:]
         if previous in periods:selected.append(periods.index(previous))
-    return sorted(set(selected))
+    return sorted(set(selected),key=end)
 
 
 def visible_rows(title,rows):
     if len(rows)<=20:return rows
     patterns={'利润表':'营业收入|营业成本|毛利润|毛利率|营业利润|利润总额|所得税|净利润|每股收益|研发|财务费用|投资收益',
               '资产负债表':'货币资金|应收账款|存货|固定资产|商誉|资产总计|资产合计|负债合计|负债总计|权益合计|股东权益|借款',
-              '现金流量表':'现金流量净额|现金及现金等价物|购建固定|分配股利|汇率变动'}
+              '现金流量表':'现金流量净额|现金及现金等价物|购建固定|分配股利|汇率变动|经营性应收|经营性应付|存货的减少|偿还债务|取得借款|销售商品|购买商品'}
     return [r for r in rows if re.search(patterns[title],r['label'])]
 
 
@@ -57,8 +61,10 @@ def render(task,result,files):
         rid=c.get('revision_id')
         if not rid or rid in by_id:continue
         source=c.get('source',{});index=len(sources)+1
-        item=dict(index=index,url=source.get('url'),locator=source.get('locator') or source.get('url') or '资料引用',
-                  kind='第一手原件' if c is task['card'] else '历史模型数据' if c.get('financial_snapshot') else '既有研究／待核验资料')
+        role=evidence_role(c)
+        label={'primary_disclosure':'第一手原件','scheduling_metadata':'任务排程记录',
+               'historical_financial_workbook':'历史模型数据'}.get(role,'既有研究／待核验资料')
+        item=dict(index=index,url=source.get('url'),locator=source.get('locator') or source.get('url') or '资料引用',kind=label)
         by_id[rid]=item;sources.append(item)
     def cites(refs):
         tokens=[]
@@ -80,6 +86,8 @@ def render(task,result,files):
         blocks.append(block('paragraph','历史实际／缓存值 A｜数据截点 '+s['as_of']+'；按 Excel 展示单位，空缺用“—”，尚待人工核验。'))
         for t in s['tables']:
             blocks.append(block('heading_3',t['title']))
+            blocks.append(block('paragraph','币种：'+(t.get('currency') or '待核验')+'；合并口径：'+
+                {'consolidated':'合并','parent':'母公司'}.get(t.get('scope'),'待核验')+'。单位按各科目列示；未确认原始缩放时，不据此跨口径合并。'))
             retained=visible_rows(t['title'],t['rows']);indices=visible_periods(t['periods'])
             if not retained:
                 blocks.append(block('paragraph','该表的关键科目尚未完成映射，请核对原始 Excel。'));continue
@@ -90,9 +98,17 @@ def render(task,result,files):
                     blocks.append(table(['科目','单位',*[t['periods'][i] for i in subset]],rows[offset:offset+40],url=s['source'].get('url')))
             omitted=len(t['rows'])-len(retained)
             if omitted or len(indices)<len(t['periods']):
-                blocks.append(block('paragraph','正文展示关键科目与可比期间；完整 '+str(len(t['rows']))+' 科目／'+str(len(t['periods']))+' 期、逐格地址保留在原始 Excel 和底稿中，未将未展示项目按零处理。'))
-        blocks.append(block('paragraph',s['note']))
-        if s.get('gaps'):blocks.append(block('paragraph','模型数据缺口：'+'；'.join(s['gaps'])))
+                omitted_periods=[p for i,p in enumerate(t['periods']) if i not in indices]
+                blocks.append(block('paragraph','正文按收入／利润、资产负债、现金转换／偿债科目名称筛选；期间取最近两年年度、最近两期及最新中期的上年同期。未展示 '+str(omitted)+' 科目；未展示期间：'+('、'.join(omitted_periods) or '无')+'。完整 '+str(len(t['rows']))+' 科目／'+str(len(t['periods']))+' 期、逐格地址保留在原始 Excel 和底稿中，未将未展示项目按零处理。'))
+        blocks.append(block('paragraph','数据为历史 Excel 缓存值，不能替代已审核预测；货币资金与现金等价物分别保留。'))
+        if s.get('gaps'):
+            gaps=Counter(g.rsplit(':',1)[-1] for g in s['gaps'])
+            labels={'missing_cached_value':'空白缓存格','invalid_cached_value':'无效缓存格',
+                    'missing_currency':'币种标签待核验','missing_scope':'合并口径待核验',
+                    'missing_raw_amount_unit':'原始金额单位待核验','missing_raw_share_unit':'原始股数单位待核验',
+                    'missing_raw_per_share_unit':'原始每股单位待核验','missing_historical_source':'原始财务来源标签待核验'}
+            summary='；'.join(labels.get(k,'其他口径／期间缺口')+' '+str(v)+' 项' for k,v in gaps.items())
+            blocks.append(block('paragraph','模型数据缺口：'+summary+'。空白不等于零，逐项位置留在完整底稿中。'))
     model=result.get('model_snapshot')
     if not model or not model.get('scenarios'):
         blocks.append(block('quote','预测与估值待补：尚无已核验的预测假设；历史 Excel 数据不自动转为当前预测或目标价。'))
@@ -123,7 +139,9 @@ def render(task,result,files):
                 blocks.append(table(['关键假设',*[str(y['year'])+'F' for y in subset],'依据（各期）'],rows))
         if model.get('assumption_changes'):
             blocks.append(block('heading_3','假设变化'))
-            blocks.append(table(['情景／年度','假设','原值','新值','依据'],[[x['scenario']+'/'+str(x['year']),x['field'],value(x['previous']),value(x['current']),x.get('source') or '待补'] for x in model['assumption_changes']]))
+            changes=model['assumption_changes']
+            for start in range(0,len(changes),40):
+                blocks.append(table(['情景／年度','假设','原值','新值','依据'],[[x['scenario']+'/'+str(x['year']),x['field'],value(x['previous']),value(x['current']),x.get('source') or '待补'] for x in changes[start:start+40]]))
     for key,title in [('changes','变化、证据与模型影响'),('counterevidence','反证与替代解释')]:
         blocks.append(block('heading_2',title))
         for i,item in enumerate(r[key],1):

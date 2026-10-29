@@ -1,12 +1,23 @@
 """Read back native report trees; do not accept a correct title with missing data."""
 from research.delivery import DeliveryError
+from urllib.parse import urlsplit,urlunsplit
+
+
+def canonical_url(url):
+    if not url:return url
+    p=urlsplit(url)
+    # Notion inserts '/' for an empty HTTP root path. Query/fragment remain
+    # exact so a different target cannot pass as mere URL normalization.
+    if p.scheme in {'http','https'} and p.netloc and not p.path:
+        return urlunsplit((p.scheme,p.netloc,'/',p.query,p.fragment))
+    return url
 
 
 def canonical_rich(items):
     output=[]
     for r in items:
         a=r.get('annotations',{});text=r.get('text',{})
-        output.append((text.get('content',r.get('plain_text','')),(text.get('link') or {}).get('url') or r.get('href'),
+        output.append((text.get('content',r.get('plain_text','')),canonical_url((text.get('link') or {}).get('url') or r.get('href')),
                        bool(a.get('bold',False))))
     return output
 
@@ -40,6 +51,8 @@ def read_tree(http,page_id,*,max_blocks=900):
                 if count>max_blocks:raise DeliveryError('report readback bound exceeded')
                 if b['type']=='table':
                     b['table']['children']=read(b['id'],depth+1)
+                elif b.get('has_children') or b.get(b['type'],{}).get('children'):
+                    raise DeliveryError('unexpected descendants under report text/row')
                 blocks.append(b)
             if not result.get('has_more'):break
             cursor=result.get('next_cursor')

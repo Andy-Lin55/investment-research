@@ -15,7 +15,8 @@ def process(task_id,*,store,drive,reports,providers,budget,day,model=None,follow
     task=store.get(task_id)
     if not task:raise ValueError('unknown durable task')
     if task['status'] in {'retry_release','published'}:return task
-    fingerprint=digest([task['card']['revision_id'],task.get('context_digest'),model,'holdings-v1'])
+    brief=task.get('research_brief');prompt_version='holdings-question-v2' if brief else 'holdings-v1'
+    fingerprint=digest([task['card']['revision_id'],task.get('context_digest'),model,prompt_version]+([brief] if brief else []))
     if (task.get('input_fingerprint') and task['input_fingerprint']!=fingerprint
             and task.get('checkpoints') and task['status'] in DELIVERY_RECOVERY_STATES):
         task['status']='pending_input_reconciliation';store.put(task);return task
@@ -79,7 +80,7 @@ def process(task_id,*,store,drive,reports,providers,budget,day,model=None,follow
         if task['evidence'].get('exposure_rationale'):
             card['company_exposure_mapping']={'rationale':task['evidence']['exposure_rationale'],
                                               'status':'explicit registry mapping; not independent exposure verification'}
-        prompt=research_prompt([card],model,context=task.get('context'),previous=task.get('previous_report'))
+        prompt=research_prompt([card],model,context=task.get('context'),previous=task.get('previous_report'),brief=brief)
         if task['kind']=='weekly_deep':
             try:
                 request=dict(task_id=task_id,input_fingerprint=fingerprint,prompt=prompt,
@@ -94,10 +95,10 @@ def process(task_id,*,store,drive,reports,providers,budget,day,model=None,follow
                 if response['task_id']!=task_id or response['input_fingerprint']!=fingerprint:
                     raise ValueError('stale local candidate')
                 report=json.loads(response['content'])
-                validation=validate_report(report,[task['card'],*task.get('context',[])],model=model)
+                validation=validate_report(report,[task['card'],*task.get('context',[])],model=model,brief=brief)
                 task['analysis']=dict(report=report,validation=validation,actual_model=response['actual_model'],
                     provider='local_codex_subscription',model_provenance=response.get('model_provenance','unreported'),
-                    input_tokens=None,output_tokens=None,cost_cny=0,prompt_version='holdings-v1',
+                    input_tokens=None,output_tokens=None,cost_cny=0,prompt_version=prompt_version,
                     evidence_revision=task['card']['revision_id'],model_version=model.get('model_version') if model else None,
                     model_snapshot=model)
                 store.put(task)
@@ -136,11 +137,11 @@ def process(task_id,*,store,drive,reports,providers,budget,day,model=None,follow
             if cost>ceiling+1e-10:return state('pending_budget_reconciliation')
             try:
                 report=json.loads(response['content'])
-                validation=validate_report(report,[task['card'],*task.get('context',[])],model=model)
+                validation=validate_report(report,[task['card'],*task.get('context',[])],model=model,brief=brief)
             except (ValueError,KeyError,TypeError) as error:return state('quality_blocked',error)
             task['analysis']=dict(report=report,validation=validation,actual_model=actual,provider=provider.name,
                                   input_tokens=usage[0],output_tokens=usage[1],cost_cny=cost,
-                                  elapsed_seconds=time.monotonic()-start,prompt_version='holdings-v1',
+                                  elapsed_seconds=time.monotonic()-start,prompt_version=prompt_version,
                                   model_version=model.get('model_version') if model else None,
                                   model_snapshot=model,
                                   evidence_revision=task['card']['revision_id'],
@@ -155,6 +156,11 @@ def process(task_id,*,store,drive,reports,providers,budget,day,model=None,follow
         except Exception as error:return state('retry_delivery',error)
     if 'report' not in task['checkpoints']:
         uncertain=task['checkpoints'].get('report_attempted',False)
+        if not uncertain and task.get('presentation_version')==2:
+            try:
+                from research.report_view import render
+                render(task,task['analysis'],task['checkpoints'])
+            except Exception as error:return state('retry_delivery',error)
         task['checkpoints']['report_attempted']=True;store.put(task)
         try:
             page=reports.publish(task,task['analysis'],task['checkpoints'],candidate=True,lookup_only=uncertain)

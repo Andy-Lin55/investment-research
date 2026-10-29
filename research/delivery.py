@@ -194,23 +194,34 @@ class NotionReports:
         """Add immutable candidate report rows; do not update Universe signals."""
         key=task['publication_key'];query={'filter':{'property':'TriggerEventID','rich_text':{'equals':key}},'page_size':100}
         body=render_report(task,result,files)
+        native=task.get('presentation_version',1)==2
+        if native:
+            from research.report_view import render
+            expected=render(task,result,files)
+        else:expected=body
         rows=self.http('POST',f'/data_sources/{self.data_source}/query',body=query)['results']
         if len(rows)>1:raise DeliveryError('duplicate report keys')
-        if rows:return self._verify(rows[0],key,body)
+        if rows:return self._verify(rows[0],key,expected)
         if lookup_only:return None
         report=result['report']
         blocks=[{'object':'block','type':'paragraph','paragraph':{'rich_text':rich(body[i:i+1800])}}
                 for i in range(0,len(body),1800)]
+        if native:blocks=expected
         if len(blocks)>95:raise ValueError('bounded report too long; write full workpaper and shorten report')
-        props={'Name':{'title':rich(task['ticker']+' 持仓研究 '+('候选版' if candidate else '正式版'))},
+        props={'Name':{'title':rich(task.get('report_title') or task['ticker']+' 持仓研究 '+('候选版' if candidate else '正式版'))},
                'Ticker':text_property(task['ticker']),'TriggerEventID':text_property(key),
                'DocType':{'select':{'name':'AI深度分析'}},'CoreThesis':text_property(report['thesis'][:1800]),
                'Analyst':text_property(result['actual_model']),'Broker':text_property(result['provider'])}
         page=self.http('POST','/pages',body={'parent':{'data_source_id':self.data_source},'properties':props,'children':blocks})
-        return self._verify(page,key,body)
+        return self._verify(page,key,expected)
     def _verify(self,page,key,expected_body=None):
         saved=self.http('GET','/pages/'+page['id'])
         if plain(saved['properties']['TriggerEventID']['rich_text'])!=key:raise DeliveryError('report key read-back differs')
+        if isinstance(expected_body,list):
+            from research.notion_report_verify import canonical,read_tree
+            actual=read_tree(self.http,page['id'])
+            if canonical(actual)!=canonical(expected_body):raise DeliveryError('native report text/table/link readback differs')
+            return {'id':page['id'],'url':saved.get('url',page.get('url')),'verified':True,'presentation_version':2}
         children=self.http('GET','/blocks/'+page['id']+'/children?page_size=100')
         if children.get('has_more'):raise DeliveryError('unexpected report content pagination')
         text=''.join(plain(b.get('paragraph',{}).get('rich_text',[])) for b in children['results'])

@@ -46,11 +46,23 @@ Store in `RESEARCH_ISSUERS_JSON` (GitHub secret) or a local `RESEARCH_REGISTRY_F
   "context_files": [{"path": "投资/行业/公司/old-note.md", "role": "prior_research"}],
   "context_pages": ["NOTION_PAGE_UUID"],
   "forecast_inputs_path": "投资/行业/公司/03_财务模型/forecast-inputs.json",
+  "financial_workbook_path": "投资/行业/公司/02_财务数据/版本/公司_历史三表与底稿.xlsx",
+  "financial_workbook_as_of": "2026-10-27",
+  "financial_workbook_company": "公司",
+  "research_question": "规模扩张能否转化为持续利润和经营现金流？",
   "next_review_date": "2026-11-01"
 }
 ```
 
 Do not merge A/H/US listings by similar names. The forecast input file contains `baseline`, `scenarios`, `as_of` with the contract tested in `tests/test_forecast_model.py`. Every assumption needs a source or explicit system-assumption rationale. Historical cash-definition bridges and financial fields require verification. Blank assumptions do not generate a complete valuation. Formal baseline changes must be reflected in the registry before subsequent tasks; a stale baseline intentionally blocks publication.
+
+## Report presentation and research direction
+
+New tasks use version 2 native Notion reports: headings, readable numbered citations, historical statement tables, explicit forecast/scenario and assumption tables when configured, counterevidence, conditional actions and missing questions. Legacy task keys keep the previous presentation and lookup behavior. Reformatting an existing candidate requires a distinct versioned publication key; it never overwrites the original report or silently changes its conclusions.
+
+The optional historical-workbook fields above admit only the explicitly mapped company template, with a checksum, actual-period labels and supported display units. Cached historical values are not approved forecasts. Main-report tables select key metrics and comparable periods; the complete data and cell coordinates stay in the source workbook and archived context. Missing values remain distinct from zero; currency/scope/scale gaps stay explicit. Native read-back verifies table children, values and links, rejecting unexpected descendants. Presentation validation runs before recording an uncertain page-creation attempt.
+
+The fixed research question enters a versioned research brief with source priorities, accounting boundaries, required countercase and conditions for changing the conclusion. Bounded excerpts retain source locations and explicit partial coverage. The report may request at most six typed missing-data items. Those are an auditable needs list, not an autonomous tool loop: only configured collectors and the mapped workbook reader retrieve data. No arbitrary URLs/files/tools, paid fallback or new data subscriptions are authorized by model output. Local AlphaEngine skills and public Dexter/Open Deep Research implementations informed the design; AlphaEngine's compiled orchestration was not reconstructed and none of those systems is a new runtime dependency. Improved instructions and passing structure checks alone do not prove better investment judgments.
 
 ## Run and recover
 

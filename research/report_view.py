@@ -63,7 +63,7 @@ def render(task,result,files):
         source=c.get('source',{});index=len(sources)+1
         role=evidence_role(c)
         label={'primary_disclosure':'第一手原件','scheduling_metadata':'任务排程记录',
-               'historical_financial_workbook':'历史模型数据'}.get(role,'既有研究／待核验资料')
+               'historical_financial_workbook':'历史模型数据','sell_side_report':'卖方观点／原文待人工核验'}.get(role,'既有研究／待核验资料')
         item=dict(index=index,url=source.get('url'),locator=source.get('locator') or source.get('url') or '资料引用',kind=label)
         by_id[rid]=item;sources.append(item)
     def cites(refs):
@@ -78,6 +78,22 @@ def render(task,result,files):
                   '；仅覆盖所列资料，不代表最新公司全貌'),block('heading_2','核心问题')]
     blocks.append(block('paragraph',task.get('research_question') or '经营变化是否改变既有持仓逻辑、财务预期与后续关注条件？'))
     blocks += [block('heading_2','结论与持仓逻辑'),block('paragraph',r['conclusion']),block('paragraph',r['thesis'])]
+    if r.get('independent_hypothesis'):
+        h=r['independent_hypothesis'];blocks.append(block('heading_2','独立假设与可推翻条件'))
+        for key,label in [('claim','判断'),('mechanism','作用机制'),('falsifier','何种事实会改变判断')]:
+            blocks.append(block('paragraph',label+'：'+h[key]))
+        blocks.append(cites(h['evidence']))
+    if r.get('broker_comparisons'):
+        blocks.append(block('heading_2','卖方观点与我们的分歧'))
+        blocks.append(block('quote','仅比较所列机构与报告日期，不代表市场共识；卖方预测不等于公司已披露事实或已审核的自有模型。'))
+        broker_map={c['revision_id']:c for c in task.get('context',[]) if c.get('broker')}
+        for row in r['broker_comparisons']:
+            b=broker_map[row['evidence'][0]]['broker']
+            blocks.append(block('heading_3',b['org_name']+'｜'+b['published_at']))
+            blocks.append(block('paragraph',b['title']+'；第 '+ '、'.join(map(str,row['pages']))+' 页'))
+            for key,label in [('broker_view','机构观点／预测'),('own_view','我们的判断'),('model_implication','模型影响'),('verification_needed','待核验')]:
+                blocks.append(block('paragraph',label+'：'+row[key]))
+            blocks.append(cites(row['evidence']))
     blocks.append(block('heading_2','财务模型与三表数据'))
     snapshots=[c['financial_snapshot'] for c in task.get('context',[]) if c.get('financial_snapshot')]
     if not snapshots:blocks.append(block('paragraph','尚未接入可展示的历史三表；原有 Excel 附件不等于已提取模型数据。'))

@@ -144,3 +144,38 @@ def test_unconfirmed_identity_is_rejected_before_archive():
     d=Drive()
     with pytest.raises(ValueError):api().archive_report(None,d,company_path='投资/公司A',issuer_id='issuer-a',report=REPORT,identity_confirmed=False,cached_pdf=pdf())
     assert d.files=={}
+
+
+def test_interrupted_original_cannot_be_rebound_to_another_identity():
+    d=Drive();save=d.put_immutable
+    def interrupt(path,data):
+        if path.endswith('/manifest.json'):raise RuntimeError('manifest upload interrupted')
+        return save(path,data)
+    d.put_immutable=interrupt
+    class Client:
+        def download(self,rid):return pdf()
+    kw=dict(company_path='投资/公司A',issuer_id='issuer-a',report=REPORT,identity_confirmed=True)
+    with pytest.raises(RuntimeError):api().archive_report(Client(),d,**kw)
+    d.put_immutable=save
+    with pytest.raises(ValueError):api().archive_report(None,d,**dict(kw,issuer_id='wrong'))
+    with pytest.raises(ValueError):api().archive_report(None,d,**dict(kw,report=dict(REPORT,published_at='2026-10-02')))
+    ref=api().archive_report(None,d,**kw)
+    assert api().load_report(d,ref,company_path='投资/公司A',issuer_id='issuer-a')['broker']['report_id']==123
+
+
+@pytest.mark.parametrize('interrupted',[False,True])
+def test_changed_cached_pdf_requires_explicit_revision_acquisition(interrupted):
+    d=Drive();raw=pdf();kw=dict(company_path='投资/公司A',issuer_id='issuer-a',report=REPORT,identity_confirmed=True)
+    if interrupted:
+        save=d.put_immutable
+        def interrupt(path,data):
+            if path.endswith('/manifest.json'):raise RuntimeError('interrupted')
+            return save(path,data)
+        d.put_immutable=interrupt
+        with pytest.raises(RuntimeError):api().archive_report(None,d,**kw,cached_pdf=raw)
+        d.put_immutable=save
+    else:api().archive_report(None,d,**kw,cached_pdf=raw)
+    import fitz
+    doc=fitz.open();p=doc.new_page();p.insert_text((72,72),'Revised broker forecast 900')
+    revised=doc.tobytes();doc.close()
+    with pytest.raises(ValueError):api().archive_report(None,d,**kw,cached_pdf=revised)

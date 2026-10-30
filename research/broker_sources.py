@@ -166,16 +166,29 @@ def archive_report(client,drive,*,company_path,issuer_id,report,identity_confirm
     if existing:
         raw,_=existing;manifest=json.loads(raw)
         if manifest.get('issuer_id')!=issuer_id or manifest.get('report')!=report:raise ValueError('archived broker identity differs')
+        if cached_pdf is not None and _sha(cached_pdf)!=manifest['original']['sha256']:
+            raise ValueError('cached PDF revision differs; explicit new acquisition required')
         ref=dict(path=manifest_path,sha256=_sha(raw),verified=True)
         load_report(drive,ref,company_path=root,issuer_id=issuer_id)
         return ref
     original_path=base+'/original.pdf';original=_optional(drive,original_path)
     attempt_path=base+'/acquisition-attempt.json'
+    prior_attempt=_optional(drive,attempt_path)
+    if prior_attempt:
+        reserved=json.loads(prior_attempt[0])
+        if reserved.get('issuer_id')!=issuer_id or reserved.get('report')!=report:
+            raise ValueError('reserved source identity differs')
+    else:
+        if original and cached_pdf is None:raise ValueError('orphan original identity requires reconciliation')
+        # Different reservation bytes make competing writers conflict instead of
+        # both observing the same marker as permission to debit an entitlement.
+        _write(drive,attempt_path,_bytes(dict(identity,attempt_id=uuid4().hex)))
+    if original and cached_pdf is not None and _sha(original[0])!=_sha(cached_pdf):
+        raise ValueError('cached PDF revision differs; explicit new acquisition required')
     if original:raw=original[0]
     elif cached_pdf is not None:raw=cached_pdf
     else:
-        if _optional(drive,attempt_path):raise BrokerError('Original acquisition uncertain; reconcile before retry')
-        _write(drive,attempt_path,_bytes(dict(identity,attempt_id=uuid4().hex)))
+        if prior_attempt:raise BrokerError('Original acquisition uncertain; reconcile before retry')
         try:raw=client.download(report['report_id'])
         except Exception:raise BrokerError('Original acquisition uncertain; reconcile before retry') from None
     if not isinstance(raw,bytes) or not raw.startswith(b'%PDF-') or len(raw)>MAX_PDF:

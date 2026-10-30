@@ -78,12 +78,13 @@ def render(task,result,files):
                   '；仅覆盖所列资料，不代表最新公司全貌'),block('heading_2','核心问题')]
     blocks.append(block('paragraph',task.get('research_question') or '经营变化是否改变既有持仓逻辑、财务预期与后续关注条件？'))
     blocks += [block('heading_2','结论与持仓逻辑'),block('paragraph',r['conclusion']),block('paragraph',r['thesis'])]
-    if r.get('independent_hypothesis'):
+    broker_contract=task.get('research_brief',{}).get('version')=='holdings-broker-v1'
+    if broker_contract and r.get('independent_hypothesis'):
         h=r['independent_hypothesis'];blocks.append(block('heading_2','独立假设与可推翻条件'))
         for key,label in [('claim','判断'),('mechanism','作用机制'),('falsifier','何种事实会改变判断')]:
             blocks.append(block('paragraph',label+'：'+h[key]))
         blocks.append(cites(h['evidence']))
-    if r.get('broker_comparisons'):
+    if broker_contract and r.get('broker_comparisons'):
         blocks.append(block('heading_2','卖方观点与我们的分歧'))
         blocks.append(block('quote','仅比较所列机构与报告日期，不代表市场共识；卖方预测不等于公司已披露事实或已审核的自有模型。'))
         broker_map={c['revision_id']:c for c in task.get('context',[]) if c.get('broker')}

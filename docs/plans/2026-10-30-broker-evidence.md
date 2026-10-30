@@ -55,3 +55,7 @@ Baseline: system Python 3.9 lacks Tushare/markdown-it/schedule (7 failed, 9 erro
 
 Baseline verified: `/private/tmp/investment-dividend-runtime/bin/python -m pytest -q` → 394 passed, 5 existing SWIG warnings.
 Task 1: 19 meaningful source contracts observed RED then GREEN. Task 2: 12 context/quality contracts and 4 CLI contracts observed RED then GREEN; whole suite 429 passed.
+
+Task 1/2 live search: six focused queries through the newly implemented official REST adapter returned 51 deduplicated candidates; no additional PDF downloads. HTML v14 extends the existing editable deck to 21 pages, preserving CSS and interactive script except its versioned local-save key.
+
+Final independent review: 0 Critical, 3 Important, 0 Minor. One fix pass reproduced four failing cases: interrupted original identity rebind, cached revision conflicts (complete/interrupted), and legacy extra-field delivery. All fixes observed RED→GREEN; full offline suite 433 passed, 5 existing SWIG warnings. No findings deferred and no review rulings.

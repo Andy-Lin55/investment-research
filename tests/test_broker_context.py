@@ -82,3 +82,19 @@ def test_report_shows_dated_broker_pages_independent_view_and_not_consensus():
     text=json.dumps(importlib.import_module('research.report_view').render(t,out,{}),ensure_ascii=False)
     assert 'Broker A' in text and '2026-10-01' in text and '第 1 页' in text
     assert '卖方观点' in text and '不代表市场共识' in text and '回款改善且现金流持续超过利润' in text
+
+
+def test_legacy_extra_broker_fields_cannot_block_existing_delivery():
+    from tests.test_research_engine import setup,run
+    m,s,t,d,reports,provider=setup();t['presentation_version']=2;s.put(t)
+    call=provider.__class__.__call__
+    class Extra(provider.__class__):
+        def __call__(self,*a,**kw):
+            r=call(self,*a,**kw);content=json.loads(r['content'])
+            content['independent_hypothesis']={'claim':'Additional legacy analysis'}
+            content['broker_comparisons']=[{'unvalidated':'legacy extra field'}]
+            r['content']=json.dumps(content);return r
+    provider.__class__=Extra
+    run((m,s,t,d,reports,provider));out=run((m,s,t,d,reports,provider))
+    assert out['checkpoints'].get('report') and reports.count==1
+    assert provider.calls==1

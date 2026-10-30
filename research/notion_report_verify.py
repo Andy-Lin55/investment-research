@@ -17,8 +17,12 @@ def canonical_rich(items):
     output=[]
     for r in items:
         a=r.get('annotations',{});text=r.get('text',{})
-        output.append((text.get('content',r.get('plain_text','')),canonical_url((text.get('link') or {}).get('url') or r.get('href')),
-                       bool(a.get('bold',False))))
+        item=(text.get('content',r.get('plain_text','')),canonical_url((text.get('link') or {}).get('url') or r.get('href')),
+              bool(a.get('bold',False)))
+        # Notion may merge adjacent equal-style runs, including citations to
+        # the same original. Match exact text/link/style, not chunk boundaries.
+        if output and output[-1][1:]==item[1:]:output[-1]=(output[-1][0]+item[0],*item[1:])
+        else:output.append(item)
     return output
 
 

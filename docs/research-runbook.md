@@ -115,3 +115,8 @@ During interrupted delivery, context/model snapshots are frozen until that publi
 
 Installed Microsoft Excel on macOS verified five synthetic cases by editing and saving the workbook, then independently reading the saved recalculated values: 20% growth, blank required value, blank required source, explicit zero growth and restoration of original inputs. Historical baseline values stayed unchanged. Reimporting the restored native workbook now preserves its exact original model version, with human review still pending. A newly reproduced numeric-serialization defect was fixed RED→GREEN and independently reviewed with no findings. These are functional checks, not a real-company or 14-day reliability trial. Production is still off; deferred API prices, dedicated cloud credentials, confirmed mappings and human financial assumptions remain required.
 
+
+
+## Broker originals and sampled expectations
+
+See [broker-evidence.md](broker-evidence.md) for explicit FX search/acquisition, immutable PDF provenance, entitlement reconciliation and the broker-enabled quality contract. Existing scheduled workflows remain unchanged.

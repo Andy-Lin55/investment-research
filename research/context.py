@@ -76,6 +76,15 @@ def prepare_task_context(task,store,drive,http,holding,*,followups=None):
                 source=source,source_text='Historical display values with explicit dates/units; not an approved forecast.',
                 missing=[],partial=False,financial_snapshot=snapshot))
         except Exception as error:gaps.append('financial_workbook_unreadable:'+type(error).__name__)
+    broker_refs=holding.get('broker_report_refs',[])
+    if not isinstance(broker_refs,list) or len(broker_refs)>2:raise ValueError('prioritize at most two broker originals')
+    for ref in broker_refs:
+        try:
+            from research.broker_sources import load_report
+            if holding['issuer_id']!=task['issuer_id']:raise ValueError('holding issuer differs')
+            entry=load_report(drive,ref,company_path=root,issuer_id=task['issuer_id'])
+            if not any(c.get('revision_id')==entry['revision_id'] for c in context):context.append(entry)
+        except Exception as error:gaps.append('broker_report_unreadable:'+type(error).__name__)
     entries=holding.get('context_files',[])
     if len(entries)>30:raise ValueError('explicitly prioritize at most 30 context files')
     for item in entries:

@@ -85,6 +85,7 @@ def build_brief(question,cards,context,model):
     if brokers:
         brief.update(version='holdings-broker-v1',broker_policy={
             'coverage':'sampled_views_only',
+            'excerpt_policy_version':'pdf-page-excerpts-v1',
             'sources':[dict(revision_id=c['revision_id'],report_id=c['broker']['report_id'],
                 org_name=c['broker']['org_name'],published_at=c['broker']['published_at'],
                 total_pages=c['broker']['total_pages']) for c in brokers],
@@ -149,14 +150,28 @@ def compact_context(context):
         else:
             text=item.get('source_text','')
             ranges=_excerpt_ranges(text) if len(text)>12000 else ([(0,len(text))] if text else [])
+            broker=item.get('evidence_kind')=='sell_side_report'
+            spans=[(a,b,None) for a,b in ranges]
+            if broker:
+                markers=list(re.finditer(r'\[PDF page (\d+)\]',text))
+                pages=[(m.start(),markers[i+1].start() if i+1<len(markers) else len(text),int(m.group(1)))
+                       for i,m in enumerate(markers)]
+                spans=[(max(a,x),min(b,y),page) for a,b in ranges for x,y,page in pages if max(a,x)<min(b,y)]
             parts=[];excerpts=[];omissions=[];prompt_offset=0;source_offset=0
             separator='\n[资料片段分界]\n'
-            for start,end in ranges:
+            for start,end,page in spans:
+                prefix='[PDF page '+str(page)+' excerpt]\n' if page is not None else ''
+                delimiter=len(separator) if parts else 0
+                if broker:
+                    end=min(end,start+12000-prompt_offset-delimiter-len(prefix))
+                    if end<=start:break
                 if start>source_offset:omissions.append(dict(source_start=source_offset,source_end=start))
                 if parts:prompt_offset+=len(separator)
+                prompt_offset+=len(prefix)
                 excerpts.append(dict(source_start=start,source_end=end,
-                    prompt_start=prompt_offset,prompt_end=prompt_offset+end-start))
-                parts.append(text[start:end]);prompt_offset+=end-start;source_offset=end
+                    prompt_start=prompt_offset,prompt_end=prompt_offset+end-start,
+                    **({'pdf_page':page} if page is not None else {})))
+                parts.append(prefix+text[start:end]);prompt_offset+=end-start;source_offset=end
             if source_offset<len(text):omissions.append(dict(source_start=source_offset,source_end=len(text)))
             item.update(source_text=separator.join(parts),prompt_excerpts=excerpts,
                 prompt_omissions=omissions,prompt_source_characters=len(text),

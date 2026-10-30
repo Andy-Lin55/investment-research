@@ -65,3 +65,11 @@ Live acceptance supplement: the real 17-source Luxshare corpus rendered 100 top-
 Ruling: current Miniso Active status was not verified, so its sample uses the existing isolated report destination directly, outside the holdings task queue. No Active status or production issuer mapping is fabricated. Cost: this sample validates source research and delivery, not mandatory-event holdings scheduling.
 
 Ruling: reconcile the exact frozen request/candidate instead of rebuilding a different corpus during delivery. Source digests and request identity are checked, and formal baseline checks still run. New evidence belongs to a subsequent candidate; no private input is silently substituted.
+
+Original-page acceptance: Luxshare broker forecast numbers checked against original pages 1/44. The Miniso draft misattributed Europe to page 3; original shows page 4. Preserve raw subscription output and a separately corrected candidate. The PDF first-page image also resolves the period omitted by damaged text extraction as 2026Q2; it remains a broker attribution pending first-party verification.
+
+Page-provenance supplement: two new tests observed RED→GREEN; only broker excerpts now retain explicit original PDF page prefixes, exact source/prompt spans and a versioned policy in the brief fingerprint. Supplementary independent review: 0 Critical/Important, 436 tests plus 500 randomized broker cases and 1,500 legacy comparisons passed.
+
+Native live read-back supplement: Notion merges adjacent citations with the same link and formatting. A reproducer observed RED; canonical comparison now merges only semantically identical runs, preserving exact text, full URL/query and bold distinctions. No second page is created after uncertain publication; recovery only looks up the saved publication key.
+
+Live delivery complete: two original PDFs archived/read back; Luxshare native candidate delivered with inline historical statements, and Miniso source-only native candidate delivered outside the holdings queue. Both preserve the core question and retain pending valuation/human/model-provenance status. Two local-subscription calls; zero new PDF debits and zero paid model API calls. Final local offline suite: 438 passed, 5 existing SWIG warnings. Formal enablement and the 14-day trial remain outstanding.

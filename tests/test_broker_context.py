@@ -119,3 +119,42 @@ def test_large_real_corpus_keeps_all_sources_in_native_reference_table():
     text=json.dumps(appendix,ensure_ascii=False)
     assert 'Prior source 15' in text and 'https://drive.invalid/prior-15' in text
     assert 'https://www.fxbaogao.com/view?id=123' in text
+
+
+def test_broker_prompt_excerpts_keep_explicit_original_page_boundaries():
+    from research.harness import compact_context
+    text='[PDF page 1]\n'+('revenue background '*1000)+'\n[PDF page 3]\nChina operations remain resilient.\n[PDF page 4]\nEurope cash flow integration remains unverified.'
+    item=compact_context([{'evidence_kind':'sell_side_report','source_text':text,'revision_id':'broker'}])[0]
+    assert '[PDF page 4 excerpt]' in item['source_text']
+    for span in item['prompt_excerpts']:
+        assert item['source_text'][span['prompt_start']:span['prompt_end']]==text[span['source_start']:span['source_end']]
+        if 'Europe' in text[span['source_start']:span['source_end']]:assert span['pdf_page']==4
+    assert len(item['source_text'])<=12000
+
+
+def test_short_broker_pages_are_labelled_without_becoming_primary_evidence():
+    from research.harness import compact_context,evidence_is_primary
+    entry={'evidence_kind':'sell_side_report','source_text':'[PDF page 3]\nChina\n[PDF page 4]\nEurope','revision_id':'broker'}
+    result=compact_context([entry])[0]
+    assert '[PDF page 3 excerpt]' in result['source_text'] and '[PDF page 4 excerpt]' in result['source_text']
+    assert {x['pdf_page'] for x in result['prompt_excerpts']}=={3,4}
+    assert evidence_is_primary(result) is False
+
+
+def test_notion_merged_adjacent_citations_preserve_semantic_readback():
+    from research.notion_report_verify import canonical_rich
+    from research.report_view import rich
+    url='https://www.fxbaogao.com/view?id=123'
+    expected=rich('[1] ',url=url)+rich('[2] ',url=url)
+    actual=rich('[1] [2] ',url=url)
+    assert canonical_rich(actual)==canonical_rich(expected)
+    assert canonical_rich(actual)!=canonical_rich(rich('[1] [3] ',url=url))
+    assert canonical_rich(actual)!=canonical_rich(rich('[1] [2] ',url=url+'&changed=1'))
+
+
+def test_readback_never_merges_different_link_or_bold_semantics():
+    from research.notion_report_verify import canonical_rich
+    from research.report_view import rich
+    parts=rich('first',url='https://source.invalid/a')+rich('second',url='https://source.invalid/b')
+    assert canonical_rich(parts)!=canonical_rich(rich('firstsecond',url='https://source.invalid/a'))
+    assert canonical_rich(rich('first')+rich('second',bold=True))!=canonical_rich(rich('firstsecond'))

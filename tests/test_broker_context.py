@@ -98,3 +98,24 @@ def test_legacy_extra_broker_fields_cannot_block_existing_delivery():
     run((m,s,t,d,reports,provider));out=run((m,s,t,d,reports,provider))
     assert out['checkpoints'].get('report') and reports.count==1
     assert provider.calls==1
+
+
+def test_large_real_corpus_keeps_all_sources_in_native_reference_table():
+    t,*_=prepared();r=valid_report(t)
+    historical,_=fixture();t['context']+=historical['context']
+    t['context'] += [{'revision_id':'prior-'+str(i),'evidence_kind':'prior_research',
+                     'source':{'url':'https://drive.invalid/prior-'+str(i),'locator':'Prior source '+str(i)},
+                     'source_text':'old analysis','missing':[]} for i in range(16)]
+    r['open_questions']=['Question '+str(i) for i in range(7)]
+    r['data_requests']=[{'kind':'primary_disclosure','need':'Data '+str(i),'why':'Resolve gap'} for i in range(5)]
+    result={'report':r,'model_snapshot':None,'provider':'local_codex_subscription','actual_model':'unreported'}
+    from research.report_view import render
+    blocks=render(t,result,{})
+    assert len(blocks)<=95
+    heading=next(i for i,b in enumerate(blocks) if b['type']=='heading_2'
+                 and b['heading_2']['rich_text'][0]['text']['content']=='资料与模型口径')
+    appendix=blocks[heading+1]['table']
+    assert len(appendix['children'])==len(t['context'])+2
+    text=json.dumps(appendix,ensure_ascii=False)
+    assert 'Prior source 15' in text and 'https://drive.invalid/prior-15' in text
+    assert 'https://www.fxbaogao.com/view?id=123' in text

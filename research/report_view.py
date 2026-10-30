@@ -171,8 +171,15 @@ def render(task,result,files):
         blocks.append(block('heading_3','下一轮需补充的数据'))
         blocks.extend(block('bulleted_list_item',x['need']+'；用途：'+x['why']) for x in r['data_requests'])
     blocks.append(block('heading_2','资料与模型口径'))
-    for s in sources:
-        blocks.append({'object':'block','type':'paragraph','paragraph':{'rich_text':rich('['+str(s['index'])+'] '+s['kind']+'｜'+s['locator'],url=s['url'])}})
+    if broker_contract and sources:
+        appendix=table(['编号','资料类型','来源／位置'],
+            [['['+str(s['index'])+']',s['kind'],s['locator']] for s in sources])
+        for row,s in zip(appendix['table']['children'][1:],sources):
+            row['table_row']['cells'][2]=rich(s['locator'],url=s['url'])
+        blocks.append(appendix)
+    else:
+        for s in sources:
+            blocks.append({'object':'block','type':'paragraph','paragraph':{'rich_text':rich('['+str(s['index'])+'] '+s['kind']+'｜'+s['locator'],url=s['url'])}})
     for key in ('source','result','model','model_workbook'):
         if key in files:
             ref=files[key];blocks.append({'object':'block','type':'paragraph','paragraph':{'rich_text':rich({'source':'原文底稿','result':'研究底稿','model':'模型数据','model_workbook':'Excel 模型'}[key],url=ref.get('url'))}})

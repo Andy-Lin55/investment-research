@@ -59,3 +59,9 @@ Task 1: 19 meaningful source contracts observed RED then GREEN. Task 2: 12 conte
 Task 1/2 live search: six focused queries through the newly implemented official REST adapter returned 51 deduplicated candidates; no additional PDF downloads. HTML v14 extends the existing editable deck to 21 pages, preserving CSS and interactive script except its versioned local-save key.
 
 Final independent review: 0 Critical, 3 Important, 0 Minor. One fix pass reproduced four failing cases: interrupted original identity rebind, cached revision conflicts (complete/interrupted), and legacy extra-field delivery. All fixes observed RED→GREEN; full offline suite 433 passed, 5 existing SWIG warnings. No findings deferred and no review rulings.
+
+Live acceptance supplement: the real 17-source Luxshare corpus rendered 100 top-level blocks, exceeding the existing single-publication limit. A new reproducing test was observed RED; broker report references now use one native table preserving every source and hyperlink. The real candidate renders 83 blocks, the Miniso source-only candidate 65; whole suite 434 passed. Legacy presentation is unchanged.
+
+Ruling: current Miniso Active status was not verified, so its sample uses the existing isolated report destination directly, outside the holdings task queue. No Active status or production issuer mapping is fabricated. Cost: this sample validates source research and delivery, not mandatory-event holdings scheduling.
+
+Ruling: reconcile the exact frozen request/candidate instead of rebuilding a different corpus during delivery. Source digests and request identity are checked, and formal baseline checks still run. New evidence belongs to a subsequent candidate; no private input is silently substituted.

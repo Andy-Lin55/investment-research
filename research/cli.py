@@ -211,6 +211,7 @@ def select_tasks(tasks,active_issuers,*,limit,day):
     runnable={'pending','retry_delivery','retry_provider','waiting_subscription','pending_followup_confirmation'}
     selected=[]
     for task in tasks:
+        if task.get('workflow_contract')=='holdings-v17' or task.get('record_type')=='control':continue
         if task['issuer_id'] not in active_issuers or task['status'] in {'retry_release','published','completed','superseded_source_resolved','evidence_only'}:continue
         eligible=task['status'] in runnable or task.get('retry_requested') is True
         if task['status']=='budget_blocked' and task.get('blocked_on_day')!=day:eligible=True

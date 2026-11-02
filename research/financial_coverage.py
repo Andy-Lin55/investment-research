@@ -13,6 +13,12 @@ TABLES={
 FULL={'年度报告','半年度报告','中期报告','季度报告','第一季度报告','第三季度报告','10-K','10-Q','20-F','10-K/A','10-Q/A','20-F/A'}
 
 
+def complete_section(kind,text):
+    normalized=re.sub(r'[（(][^）)]{0,80}[）)]','',text)
+    normalized=normalized.replace('负债和股东权益总计','负债和所有者权益总计')
+    return all(any(marker in normalized for marker in choices) for choices in TABLES[kind][1])
+
+
 def required_statements(profile,document_type):
     rules=profile.get('disclosure_rules',{})
     if document_type in rules:return list(rules[document_type])
@@ -24,26 +30,31 @@ def build_coverage(pages: list[dict], *, profile: dict, document_type: str, peri
     required=required_statements(profile,document_type)
     if any(s not in TABLES for s in required):raise ValueError('unsupported statement requirement')
     sections={s:[] for s in TABLES};active=None;scope=None
+    def append(kind,page,text,scope):
+        old=''.join(x[1] for x in sections[kind] if x[2]=='consolidated')
+        if complete_section(kind,old):return
+        sections[kind].append((page,text,scope))
     for page in sorted(pages,key=lambda x:x['page']):
         text=re.sub(r'\s+','',page['text']).upper()
         headings=[]
         for kind,(pattern,_) in TABLES.items():
             for match in re.finditer(pattern,text):headings.append((match.start(),kind))
         if not headings:
-            if active:sections[active].append((page,text,scope))
+            if active:append(active,page,text,scope)
             continue
         headings.sort()
+        if active and headings[0][0]>0:append(active,page,text[:headings[0][0]],scope)
         for index,(offset,kind) in enumerate(headings):
             prefix=text[max(0,offset-30):offset]
             scope='parent' if '母公司' in prefix or 'PARENT' in prefix else 'consolidated' if '合并' in prefix or 'CONSOLIDATED' in prefix else page.get('scope')
             active=kind
             end=headings[index+1][0] if index+1<len(headings) else len(text)
-            sections[kind].append((page,text[max(0,offset-30):end],scope))
+            append(kind,page,text[max(0,offset-30):end],scope)
     gaps=[];statements={}
     for kind in required:
         entries=[x for x in sections[kind] if x[2]=='consolidated']
         combined=''.join(x[1] for x in entries)
-        complete=bool(entries) and all(any(marker in combined for marker in choices) for choices in TABLES[kind][1])
+        complete=bool(entries) and complete_section(kind,combined)
         omitted=[p['page'] for p,_,_ in entries if p.get('included',True) is not True]
         unit=bool(re.search(r'单位[:：].{0,12}(?:元|万元|千元)|IN(?:MILLIONS|THOUSANDS)|RMBMILLION',combined))
         currency=bool(re.search(r'人民币|港元|美元|\b(?:CNY|HKD|USD)|RMB',combined))

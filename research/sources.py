@@ -93,6 +93,7 @@ def document_type(title,form=None):
     if re.search(r'业绩预告修正|業績預告修正',title):return '业绩预告修正'
     if re.search(r'业绩预告|業績預告|PROFIT WARNING',title,re.I):return '业绩预告'
     if re.search(r'业绩快报|業績快報',title):return '业绩快报'
+    if re.search(r'半年|中期報告|中期报告|INTERIM REPORT',title,re.I):return '中期报告'
     if re.search(r'年[度報报]|ANNUAL REPORT',title,re.I):return '年度报告'
     if re.search(r'季度|QUARTER',title,re.I):return '季度报告'
     if re.search(r'半年|中期報告|中期报告|INTERIM REPORT',title,re.I):return '中期报告'

@@ -49,6 +49,9 @@ def build_next_state(previous: dict, result: dict, *, manifest: dict) -> dict:
         if not isinstance(q,dict) or not q.get('id') or not q.get('need'):raise ValueError('identified follow-up required')
         if q.get('resolved') is not True:questions[q['id']]=deepcopy(q)
     state['open_questions']=list(questions.values())
+    if 'source_revisions' in result:state['source_revisions']=deepcopy(result['source_revisions'])
+    for key in ('holding_logic','context_version'):
+        if key in result:state[key]=deepcopy(result[key])
     state['last_published_research']=dict(manifest,review_status='unadopted')
     return state
 
@@ -56,7 +59,7 @@ def build_next_state(previous: dict, result: dict, *, manifest: dict) -> dict:
 def advance_task(task_id: str, *, store, adapters: dict, now: str) -> dict:
     date.fromisoformat(now);task=store.get(task_id)
     if not task or task.get('workflow_contract')!='holdings-v17':raise ValueError('v17 durable task required')
-    if task['status'] in {'completed','no_change'}:return task
+    if task['status'] in {'completed','no_change'} or task.get('next_state') and task['status']=='partial':return task
     payload={'event':deepcopy(task['trigger']),'profile':task['profile'],'previous':task['previous_state']}
     def save(status,**fields):
         task.update(status=status,updated_at=now,**fields);store.put(task);return task
@@ -81,6 +84,19 @@ def advance_task(task_id: str, *, store, adapters: dict, now: str) -> dict:
                 if 'archive' in adapters and ref.get('verified') is not True:raise ValueError('unverified stage archive')
                 task['stage_refs'][stage]=dict(ref,output_digest=digest(output));store.put(task)
             payload[stage]=output
+            if stage=='judgment' and output.get('data_requests'):
+                from research.contract_v17 import validate_requests
+                requests=validate_requests(output['data_requests'])
+                if task.get('retrieval_round',0)<2:
+                    task['retrieval_round']=task.get('retrieval_round',0)+1
+                    task['retrieval_requests']=requests
+                    task.setdefault('stage_history',[]).append(deepcopy(task['stage_refs']))
+                    task['stage_refs']={k:v for k,v in task['stage_refs'].items() if k=='coverage'}
+                    store.put(task)
+                    return advance_task(task_id,store=store,adapters=adapters,now=now)
+                task['unresolved_data_requests']=requests;task['research_status']='partial';store.put(task)
+            if stage=='report' and (task.get('research_status')=='partial' or output.get('research_status')=='partial'):
+                task['research_status']='partial'
         expected=task['previous_state'].get('accepted_baseline')
         if 'baseline' not in adapters:raise StageWait('waiting_source',['baseline_check_unavailable'])
         if adapters['baseline'](task)!=expected:return save('baseline_conflict')
@@ -92,11 +108,13 @@ def advance_task(task_id: str, *, store, adapters: dict, now: str) -> dict:
                 raise ValueError('publication not verified against frozen inputs')
             task['checkpoints']['publication']=manifest;store.put(task)
         result=dict(payload['report'],issuer_id=task['issuer_id'])
+        result['source_revisions']={d['document_id']:d['revision_id'] for d in payload['coverage'].get('documents',[])}
+        result['context_version']=payload['coverage'].get('context_version')
         new=build_next_state(task['previous_state'],result,manifest=task['checkpoints']['publication'])
         current=company_state(store,task['issuer_id'])
         if current and current.get('last_published_research') not in (task['previous_state'].get('last_published_research'),new.get('last_published_research')):
             return save('baseline_conflict')
         store.put(control('v17:company:'+task['issuer_id'],task['issuer_id'],research_state=new))
-        return save('completed',next_state=new)
+        return save('partial' if task.get('research_status')=='partial' else 'completed',next_state=new)
     except StageWait as error:return save(error.status,gaps=error.gaps)
     except Exception as error:return save('retryable_failure',last_error_type=type(error).__name__)

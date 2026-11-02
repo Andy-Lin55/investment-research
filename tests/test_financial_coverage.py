@@ -55,3 +55,13 @@ def test_source_failure_and_revision_discovery_cannot_be_called_fresh():
     assert out['status']=='unknown'
     revision=[dict(known[0],revision_id='corrected')]
     assert api().check_freshness(known,revision,profile=profile(),as_of='2026-11-02')['revisions']
+
+
+def test_previous_statement_tail_above_next_heading_is_kept_and_shareholder_aliases_match():
+    data=pages()
+    data[0]['included']=True
+    data[1]['text']='负债和所有者权益（或股东权益）总计 100\n母公司资产负债表 单位：元 资产总计 50'
+    data[2]['text']+='\n母公司利润表 净利润 2'
+    out=api().build_coverage(data,profile=profile(),document_type='年度报告',period_end='2025-12-31',document_id='changed-layout')
+    assert out['original_complete'] is True and out['input_complete'] is True
+    assert out['statements']['balance']['pages']==[8,9]

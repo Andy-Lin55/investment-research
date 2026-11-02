@@ -147,8 +147,8 @@ def get_active_tickers() -> list[str]:
     return tickers
 
 
-def get_daily_tickers() -> list[str]:
-    """从 Universe DB 获取 Status=Active 或 Watch 的股票（每日公告/新闻 + Research Pipeline 用）"""
+def get_daily_tickers(*, company_names: dict[str, str] | None = None) -> list[str]:
+    """获取 Active/Watch 股票；可选输出 company_names 复用同一批 Universe 记录的 Name。"""
     client = get_client()
     tickers = []
     cursor = None
@@ -171,7 +171,13 @@ def get_daily_tickers() -> list[str]:
                 props = page.get("properties", {})
                 ticker_prop = props.get("Ticker", {}).get("rich_text", [])
                 if ticker_prop:
-                    tickers.append(ticker_prop[0]["plain_text"])
+                    ticker = ticker_prop[0]["plain_text"]
+                    tickers.append(ticker)
+                    if company_names is not None:
+                        company_names[ticker] = "".join(
+                            item.get("plain_text") or item.get("text", {}).get("content", "")
+                            for item in props.get("Name", {}).get("title", [])
+                        ).strip()
             if res.get("has_more"):
                 cursor = res["next_cursor"]
             else:

@@ -100,7 +100,8 @@ def job_fetch_and_parse() -> None:
 def _job_fetch_and_parse() -> None:
     logger.info("═" * 50)
     logger.info("📡 开始每日公告抓取任务")
-    tickers = get_daily_tickers()
+    company_names: dict[str, str] = {}
+    tickers = get_daily_tickers(company_names=company_names)
     if not tickers:
         logger.warning("没有 Active/Watch 股票，跳过")
         return
@@ -108,7 +109,7 @@ def _job_fetch_and_parse() -> None:
     # 日常公告保留近3天；定期报告回溯7天，补回跨周末漏抓的披露。
     cutoff_date = (date.today() - timedelta(days=3)).isoformat()
     periodic_cutoff_date = (date.today() - timedelta(days=7)).isoformat()
-    all_announcements: dict[str, list[dict]] = batch_fetch(tickers, days_back=3)
+    all_announcements: dict[str, list[dict]] = batch_fetch(tickers, days_back=3, company_names=company_names)
     # CNINFO 可能忽略日期过滤，合并前分别应用各自窗口。
     for ticker, ann_list in all_announcements.items():
         all_announcements[ticker] = [
@@ -117,7 +118,7 @@ def _job_fetch_and_parse() -> None:
     for ticker in tickers:
         if ticker.endswith((".SH", ".SZ", ".BJ")):
             try:
-                periodic = fetch_periodic_reports(ticker, days_back=7)
+                periodic = fetch_periodic_reports(ticker, days_back=7, company_name=company_names.get(ticker))
                 existing = {a["title"] for a in all_announcements.get(ticker, [])}
                 new_items = [
                     a for a in periodic

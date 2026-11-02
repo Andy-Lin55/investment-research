@@ -105,30 +105,34 @@ def _job_fetch_and_parse() -> None:
         logger.warning("没有 Active/Watch 股票，跳过")
         return
 
-    # 合并两组关键字的结果：日常公告 + 年报/季报（仅抓近3天，历史已处理）
+    # 日常公告保留近3天；定期报告回溯7天，补回跨周末漏抓的披露。
+    cutoff_date = (date.today() - timedelta(days=3)).isoformat()
+    periodic_cutoff_date = (date.today() - timedelta(days=7)).isoformat()
     all_announcements: dict[str, list[dict]] = batch_fetch(tickers, days_back=3)
+    # CNINFO 可能忽略日期过滤，合并前分别应用各自窗口。
+    for ticker, ann_list in all_announcements.items():
+        all_announcements[ticker] = [
+            a for a in ann_list if not a.get("date") or a["date"] >= cutoff_date
+        ]
     for ticker in tickers:
         if ticker.endswith((".SH", ".SZ", ".BJ")):
             try:
-                periodic = fetch_periodic_reports(ticker, days_back=3)
+                periodic = fetch_periodic_reports(ticker, days_back=7)
                 existing = {a["title"] for a in all_announcements.get(ticker, [])}
-                new_items = [a for a in periodic if a["title"] not in existing]
+                new_items = [
+                    a for a in periodic
+                    if a["title"] not in existing
+                    and (not a.get("date") or a["date"] >= periodic_cutoff_date)
+                ]
                 all_announcements.setdefault(ticker, []).extend(new_items)
             except Exception as e:
                 logger.error(f"定期报告抓取失败 [{ticker}]: {e}")
     written = 0
 
-    cutoff_date = (date.today() - timedelta(days=3)).isoformat()
-
     for ticker, ann_list in all_announcements.items():
         for ann in ann_list:
             if not ann.get("pdf_path"):
                 logger.debug(f"[{ticker}] 无 PDF，跳过解析: {ann.get('title')}")
-                continue
-            # CNINFO 忽略日期过滤，手动跳过3天外的历史公告（避免反复 AI 解析）
-            ann_date = ann.get("date", "")
-            if ann_date and ann_date < cutoff_date:
-                logger.debug(f"[{ticker}] 跳过历史公告（{ann_date}）: {ann.get('title')}")
                 continue
             try:
                 event_type = _infer_event_type(ann.get("title", ""))

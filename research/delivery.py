@@ -23,7 +23,7 @@ def scoped_path(path):
 
 
 class GraphDrive:
-    def __init__(self,http):self.http=http
+    def __init__(self,http,*,simple_staging=False):self.http=http;self.simple_staging=simple_staging
     def locator(self,path):return '/me/drive/root:/'+quote(scoped_path(path),safe='/')
     def read(self,path):
         loc=self.locator(path)
@@ -86,12 +86,18 @@ class GraphDrive:
         except ServiceError as error:
             if error.status!=404:raise
             self._parents(path)
-            session=self.http('POST',loc+':/createUploadSession',body={'item':{'@microsoft.graph.conflictBehavior':'fail'}})
-            url=session['uploadUrl'];chunk_size=320*1024*10
-            for offset in range(0,len(data),chunk_size):
-                chunk=data[offset:offset+chunk_size]
-                self.http('PUT',url,body=chunk,headers={'Content-Length':str(len(chunk)),
-                    'Content-Range':f'bytes {offset}-{offset+len(chunk)-1}/{len(data)}'},authenticated=False)
+            if self.simple_staging and path.startswith('投资/_研究上传暂存/') and len(data)<=4*1024*1024:
+                # Only a new UUID staging path can use Graph's single-request upload.
+                # Final names still require verified bytes and conflict-failing move.
+                self.http('PUT',loc+':/content',body=data,
+                    headers={'Content-Type':'application/octet-stream','If-None-Match':'*'})
+            else:
+                session=self.http('POST',loc+':/createUploadSession',body={'item':{'@microsoft.graph.conflictBehavior':'fail'}})
+                url=session['uploadUrl'];chunk_size=320*1024*10
+                for offset in range(0,len(data),chunk_size):
+                    chunk=data[offset:offset+chunk_size]
+                    self.http('PUT',url,body=chunk,headers={'Content-Length':str(len(chunk)),
+                        'Content-Range':f'bytes {offset}-{offset+len(chunk)-1}/{len(data)}'},authenticated=False)
             old,meta=self.read(path)
             if hashlib.sha256(old).hexdigest()!=digest:raise DeliveryError('upload read-back checksum differs')
         return dict(path=path,sha256=digest,id=meta['id'],etag=meta['eTag'],url=meta.get('webUrl'),verified=True)

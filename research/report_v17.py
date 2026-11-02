@@ -10,6 +10,23 @@ def render(task,result,files):
     blocks.append(table(['逻辑','变化与依据','证伪条件'],[[x['claim'],x['change']+'：'+x['reason'],x['falsifier']] for x in r['holding_logic']]))
     blocks.extend([block('heading_2','核心分歧与自己的判断'),block('paragraph',r['key_disagreement']),
         table(['指标／期间','差异解释／缺口','可比状态'],[[x['metric'],x['reason'],x['status']] for x in r['earnings_differences']])])
+    price=result.get('market_snapshot')
+    if price:
+        blocks.append(block('paragraph','价格基准：'+price['ticker']+' '+value(price['price'])+' '+price['currency']+
+            '｜交易日 '+price['trade_date']+'；Tushare 未复权收盘价，非盘中实时报价。'))
+    history=result.get('historical_tables',[])
+    if history:
+        blocks.append(block('heading_2','历史三张表｜实际值 A'))
+        for item in history:
+            blocks.append(block('heading_3',item['title']+'｜'+item['currency']+' 原币／'+item['period_basis']))
+            if item['origin']=='broker_reported_history':blocks.append(block('paragraph','卖方原文转载历史数，尚未经公司公告交叉核验；非卖方预测。'))
+            periods=item['periods']
+            for offset in range(0,len(periods),6):
+                selected=periods[offset:offset+6]
+                blocks.append(table(['指标／单位',*selected],[[row['label']+' / '+row['unit'],
+                    *[value(v) for v in row['values'][offset:offset+6]]] for row in item['rows']]))
+        blocks.append(block('paragraph','利润表和现金流量表非年度期间为年初至今累计；资产负债表为期末数。货币资金与现金等价物口径不同，缺项留空。'))
+    if result.get('financial_gaps'):blocks.append(block('paragraph','财务数据待核验：'+'；'.join(result['financial_gaps'])))
     comparison=result.get('forecast_comparison',{})
     if comparison.get('comparable'):
         blocks.append(block('heading_3','自有预测与机构预期对照'))
@@ -51,7 +68,7 @@ def render(task,result,files):
             str(doc.get('revision_id'))+'｜'+str(doc.get('locator') or doc.get('document_id')),
             url=doc.get('url'))}})
     for key,ref in files.items():
-        if key in {'source','result','model','model_workbook'}:
+        if key in {'source','result','model','model_workbook','financial_workbook','financial_data'}:
             blocks.append({'object':'block','type':'paragraph','paragraph':{'rich_text':rich(key+'｜'+ref['path'],url=ref.get('url'))}})
     blocks.append(block('paragraph','实际模型：'+result['actual_model']+'；推理服务：'+result['provider']+'。自动校验不代表人工确认。'))
     if len(blocks)>95:raise ValueError('report exceeds bounded native publication')

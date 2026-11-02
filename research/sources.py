@@ -13,6 +13,8 @@ def public_json(method,url,**kwargs):
     import requests
     headers={'User-Agent':os.getenv('SEC_USER_AGENT','InvestmentResearch contact-required@example.invalid'),
              'Accept':'application/json','Referer':'https://www.cninfo.com.cn/'}
+    if urlsplit(url).hostname=='www.cninfo.com.cn':
+        headers.update({'User-Agent':'Mozilla/5.0','X-Requested-With':'XMLHttpRequest'})
     try:
         r=requests.request(method,url,headers=headers,timeout=(15,45),**kwargs)
         if not 200<=r.status_code<300:raise ServiceError(r.status_code)
@@ -20,23 +22,30 @@ def public_json(method,url,**kwargs):
     except (requests.RequestException,ValueError):raise CoverageError('Source request failed; not evidence of no disclosures') from None
 
 
-def cninfo(ticker,start,end,request=public_json):
-    code=ticker.split('.')[0];rows=[];seen=set()
-    for page in range(1,101):
-        data=request('POST','https://www.cninfo.com.cn/new/hisAnnouncement/query',data={
-            'pageNum':page,'pageSize':100,'tabName':'fulltext','searchkey':code,'seDate':start+'~'+end})
-        if not isinstance(data.get('announcements'),list) or not isinstance(data.get('hasMore'),bool):
-            raise CoverageError('CNINFO response does not prove page coverage')
-        for item in data['announcements']:
-            if str(item.get('secCode'))!=code:continue
-            identity=item['announcementId']
-            if identity in seen:continue
-            seen.add(identity)
-            rows.append(dict(title=re.sub('<[^>]+>','',item['announcementTitle']),
-                             url='https://static.cninfo.com.cn/'+item['adjunctUrl'],document_id=str(identity),
-                             published_at=datetime.fromtimestamp(item['announcementTime']/1000,timezone.utc).isoformat()))
-        if not data['hasMore']:return rows
-    raise CoverageError('CNINFO pagination exceeded bound; disclosures remain pending')
+def cninfo(ticker,start,end,request=public_json,*,company_name=None):
+    code=ticker.split('.')[0]
+    def collect(key):
+        rows=[];seen=set()
+        for page in range(1,101):
+            data=request('POST','https://www.cninfo.com.cn/new/hisAnnouncement/query',data={
+                'pageNum':page,'pageSize':100,'tabName':'fulltext','searchkey':key,'seDate':start+'~'+end})
+            items=data.get('announcements')
+            if items is None and company_name and data.get('totalAnnouncement')==0 and data.get('hasMore') is False:items=[]
+            if not isinstance(items,list) or not isinstance(data.get('hasMore'),bool):
+                raise CoverageError('CNINFO response does not prove page coverage')
+            for item in items:
+                if str(item.get('secCode'))!=code:continue
+                identity=item['announcementId']
+                if identity in seen:continue
+                seen.add(identity)
+                rows.append(dict(title=re.sub('<[^>]+>','',item['announcementTitle']),
+                    url='https://static.cninfo.com.cn/'+item['adjunctUrl'],document_id=str(identity),
+                    published_at=datetime.fromtimestamp(item['announcementTime']/1000,timezone.utc).isoformat()))
+            if not data['hasMore']:return rows
+        raise CoverageError('CNINFO pagination exceeded bound; disclosures remain pending')
+    rows=collect(code)
+    if company_name:rows.extend(collect(company_name))
+    return list({r['document_id']:r for r in rows}.values())
 
 
 def hkex(ticker,start,end,request=public_json):

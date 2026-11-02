@@ -114,7 +114,10 @@ class OfficialSource:
         result=[]
         for ticker in profile.get('active_tickers',profile['tickers']):
             market='HK' if ticker.endswith('.HK') else 'CN' if ticker.endswith(('.SZ','.SH','.BJ')) else 'US'
-            for raw in self.collectors[market](ticker,start,end):
+            collector=self.collectors[market]
+            rows=(collector(ticker,start,end,company_name=profile['company_aliases'][0])
+                if market=='CN' and collector is sources.cninfo and profile.get('company_aliases') else collector(ticker,start,end))
+            for raw in rows:
                 row=dict(raw,ticker=ticker,issuer_id=profile['issuer_id'])
                 row['document_type']=sources.document_type(row['title'],row.get('document_type'))
                 if row['document_type']=='公告':continue
@@ -133,11 +136,15 @@ class OfficialSource:
         if parsed['partial'] or not parsed['text'].strip():raise ValueError('complete readable source extraction required')
         chunks=re.split(r'\[PDF page (\d+)\]\s*',parsed['text'])
         pages=[{'page':int(chunks[i]),'text':chunks[i+1]} for i in range(1,len(chunks),2)] if kind=='pdf' else [{'page':1,'text':parsed['text']}]
+        report_period=period_end('\n'.join(p['text'] for p in pages[:2]),row['document_type'],profile)
+        if not report_period and not row.get('title_is_scheduling_metadata'):
+            report_period=period_end(row['title'],row['document_type'],profile)
         document=dict(issuer_id=profile['issuer_id'],document_id=row['document_id'],revision_id=sha,
             document_type=row['document_type'],title=row['title'],published_at=row['published_at'],
-            metadata_revision=row['metadata_revision'],period_end=period_end(row['title'],row['document_type'],profile),
+            publication_precision=row.get('publication_precision','timestamp'),
+            metadata_revision=row['metadata_revision'],period_end=report_period,
             pages=pages,total_pages=parsed['total_pages'],source={'url':row['url'],'original':original},ticker=row['ticker'])
-        ref=self.drive.put_immutable(base+'.json',json.dumps(document,ensure_ascii=False,allow_nan=False).encode())
+        ref=self.drive.put_immutable(base+'-'+digest(document)+'.json',json.dumps(document,ensure_ascii=False,allow_nan=False).encode())
         self.store.put(control(key,profile['issuer_id'],metadata_revision=row['metadata_revision'],reference=ref))
         return ref,document
 
@@ -180,7 +187,7 @@ class OfficialSource:
             if row['document_id'] not in docs:
                 _,doc=self.original(p,row);docs[doc['document_id']]=doc
         self.store.put(task)
-        return list(docs.values())
+        return list({doc['revision_id']:doc for doc in docs.values()}.values())
 
     def prepublish(self,payload,task):
         now=task.get('updated_at',task['created_at'])[:10]
@@ -248,6 +255,7 @@ def broker_adapter(store,drive,env):
 def run(args,env):
     from research.cli import notion_http,graph_drive,registry,active_roster
     from research.v17 import build_adapters
+    from research.existing_data import DailyEventsSource,load_financial_data,tushare_query
     http=notion_http(env);drive=graph_drive(env)
     store=NotionTaskStore(http,env['RESEARCH_NOTION_TASKS_SOURCE_ID'],content_loader=lambda ref:drive.read(ref['path'])[0])
     if args.mode=='local':
@@ -258,6 +266,8 @@ def run(args,env):
     for holding in roster['holdings']:
         try:
             p=resolve_profile(holding,holding.get('research_profile',{}))
+            if env.get('RESEARCH_EVENTS_SOURCE_ID') and 'sources' not in holding.get('research_profile',{}):
+                p['sources']=['daily_events']
             p['sources']=list(dict.fromkeys(p['sources']+['feed:'+digest(f['url'])[:16] for f in feeds if p['issuer_id'] in f.get('issuer_ids',[])]))
             profiles.append(p)
         except ValueError:gaps.append(holding['issuer_id']+':profile_incomplete')
@@ -266,6 +276,8 @@ def run(args,env):
     source=OfficialSource(store,drive)
     if args.mode=='scan':
         source_adapters={'official':source.discover}
+        if env.get('RESEARCH_EVENTS_SOURCE_ID'):
+            source_adapters['daily_events']=DailyEventsSource(http,env['RESEARCH_EVENTS_SOURCE_ID'],source).discover
         for feed in feeds:source_adapters['feed:'+digest(feed['url'])[:16]]=FeedSource(store,drive,feed).discover
         result=discover_events(profiles,store=store,adapters=source_adapters,as_of=now)
     elif args.mode=='weekly':
@@ -277,9 +289,18 @@ def run(args,env):
         result={'queued':queued,'screened':len(profiles)}
     else:
         reports=NotionReports(http,env['RESEARCH_NOTION_REPORTS_SOURCE_ID'])
+        def existing_financial_data(task):
+            if task['profile']['market']=='CN' and not env.get('TUSHARE_TOKEN'):
+                return {'gaps':['research_tushare_token_not_configured'],'market_snapshot':None,'historical_tables':[]}
+            try:
+                return load_financial_data(task['profile'],as_of=task.get('updated_at',task['created_at'])[:10],
+                    query=tushare_query(env.get('TUSHARE_TOKEN','')),drive=drive)
+            except (ValueError,OSError,ServiceError) as error:
+                return {'gaps':['financial_source_unavailable:'+type(error).__name__],'market_snapshot':None,'historical_tables':[]}
         adapters=build_adapters(store=store,drive=drive,reports=reports,env=env,documents=source.documents,
             prepublish=source.prepublish,retrieval=broker_adapter(store,drive,env),
-            prior_context=lambda task:load_prior_context(task['profile'],drive,http))
+            prior_context=lambda task:load_prior_context(task['profile'],drive,http),
+            financial_data=existing_financial_data)
         active={p['issuer_id'] for p in profiles};result={}
         candidates=[t for t in store.list() if t.get('workflow_contract')=='holdings-v17' and t['issuer_id'] in active
             and t.get('record_type')=='research_task' and t['status'] not in {'completed','no_change','superseded','quality_blocked','baseline_conflict'}

@@ -47,10 +47,12 @@ def _hash(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False, allow_nan=False).encode()).hexdigest()
 
 
-def normalize_statements(payloads, *, ticker, as_of, currency, annual_years=5, interim_periods=8):
+def normalize_statements(payloads, *, ticker, as_of, currency, annual_years=5, interim_periods=8,allow_sector_history=False):
     """Choose latest disclosed consolidated YTD rows and retain field provenance.
 
-    v1 supports calendar-year industrial A-shares and provider amounts in CNY.
+    v1 defaults to calendar-year industrial A-shares and provider amounts in CNY.
+    Research may opt into other provider company types for historical display
+    only; this does not validate an industry-specific forecast or valuation.
     Report types 1/4 are consolidated cumulative; parent and single-quarter
     source rows are excluded. EPS remains per share and shares remain counts.
     """
@@ -74,7 +76,8 @@ def normalize_statements(payloads, *, ticker, as_of, currency, annual_years=5, i
             if raw.get("ts_code") != ticker or str(raw.get("report_type")) not in {"1", "4"}:
                 excluded.append({"statement": kind, "row": index, "reason": "different_company_or_nonconsolidated_ytd"})
                 continue
-            if str(raw.get("comp_type")) != "1":
+            company_type=str(raw.get('comp_type'))
+            if company_type not in {'1','2','3','4'} or company_type!='1' and not allow_sector_history:
                 raise ValueError("bank/insurance/securities statements require a separate sector template")
             end = _day(raw.get("end_date"))
             if (end.month, end.day) not in {(3, 31), (6, 30), (9, 30), (12, 31)}:
@@ -98,6 +101,7 @@ def normalize_statements(payloads, *, ticker, as_of, currency, annual_years=5, i
             normalized = {
                 "statement": kind, "ticker": ticker, "currency": currency,
                 "scope": "consolidated", "report_type": str(raw["report_type"]),
+                "company_type":company_type,
                 "period_start": None if kind == "balancesheet" else f"{end.year}-01-01",
                 "period_end": end.isoformat(), "period_basis": "instant" if kind == "balancesheet" else "year_to_date",
                 "published_at": published.isoformat(), "value_kind": "reported_provider",

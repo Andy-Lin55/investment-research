@@ -25,7 +25,7 @@ def invalidate_inputs(task,reason,*,previous=None):
     task['input_generation']=task.get('input_generation',0)+1
     task['input_digest']=digest([task['trigger'],task['profile'],task['previous_state'],task['input_generation']])
     task.update(stage_refs={},checkpoints={},retrieval_round=0,research_status=None)
-    for key in ('publication_files','publication_attempted','unresolved_data_requests','retrieval_requests'):
+    for key in ('publication_files','publication_attempted','unresolved_data_requests','retrieval_requests','retrieval_exhausted'):
         task.pop(key,None)
 
 
@@ -78,6 +78,10 @@ def advance_task(task_id: str, *, store, adapters: dict, now: str) -> dict:
     payload={'event':deepcopy(task['trigger']),'profile':task['profile'],'previous':task['previous_state']}
     def save(status,**fields):
         task.update(status=status,updated_at=now,**fields);store.put(task);return task
+    def read_stage(ref):
+        value=adapters['read'](ref) if 'path' in ref else deepcopy(ref['value'])
+        if digest(value)!=ref['output_digest']:raise ValueError('checkpoint digest mismatch')
+        return value
     try:
         current=company_state(store,task['issuer_id'])
         if current and current!=task['previous_state']:
@@ -91,8 +95,7 @@ def advance_task(task_id: str, *, store, adapters: dict, now: str) -> dict:
             task['running_stage']=stage
             if stage in task['stage_refs']:
                 ref=task['stage_refs'][stage]
-                output=adapters['read'](ref) if 'path' in ref else deepcopy(ref['value'])
-                if digest(output)!=ref['output_digest']:raise ValueError('checkpoint digest mismatch')
+                output=read_stage(ref)
             else:
                 store.put(task)
                 if stage not in adapters:raise StageWait('waiting_source',['adapter_missing:'+stage])
@@ -107,10 +110,20 @@ def advance_task(task_id: str, *, store, adapters: dict, now: str) -> dict:
                 if 'archive' in adapters and ref.get('verified') is not True:raise ValueError('unverified stage archive')
                 task['stage_refs'][stage]=dict(ref,output_digest=digest(output));store.put(task)
             payload[stage]=output
+            if stage=='retrieval' and task.get('retrieval_round',0)>0 and isinstance(output.get('reports'),list):
+                previous=next((refs for refs in reversed(task.get('stage_history',[]))
+                    if all(name in refs for name in ('retrieval','model','judgment'))),None)
+                if previous:
+                    before=read_stage(previous['retrieval'])
+                    if (isinstance(before.get('reports'),list)
+                            and sorted(digest(r) for r in before['reports'])==sorted(digest(r) for r in output['reports'])):
+                        task['retrieval_exhausted']=True
+                        task['stage_refs'].update({name:deepcopy(previous[name]) for name in ('model','judgment')})
+                        store.put(task)
             if stage=='judgment' and output.get('data_requests'):
                 from research.contract_v17 import validate_requests
                 requests=validate_requests(output['data_requests'])
-                if task.get('retrieval_round',0)<2:
+                if task.get('retrieval_round',0)<2 and not task.get('retrieval_exhausted'):
                     task['retrieval_round']=task.get('retrieval_round',0)+1
                     task['retrieval_requests']=requests
                     task.setdefault('stage_history',[]).append(deepcopy(task['stage_refs']))

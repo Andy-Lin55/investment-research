@@ -66,7 +66,7 @@ def reason(stage,payload,task,*,store,drive,providers,now):
     raise StageWait('waiting_budget',['pricing_unknown'])
 
 
-def build_adapters(*,store,drive,reports,env,documents,reasoner=None,baseline=None,prepublish=None,retrieval=None,prior_context=None):
+def build_adapters(*,store,drive,reports,env,documents,reasoner=None,baseline=None,prepublish=None,retrieval=None,prior_context=None,financial_data=None):
     """Connect actual archive, model, report and delivery boundaries to v17 stages."""
     from research.financial_coverage import build_coverage
     from research.forecast_inputs import build_candidate_inputs
@@ -96,30 +96,36 @@ def build_adapters(*,store,drive,reports,env,documents,reasoner=None,baseline=No
             if doc['issuer_id']!=task['issuer_id']:raise ValueError('document issuer differs')
             checks.append(build_coverage(doc['pages'],profile=task['profile'],document_type=doc['document_type'],
                 period_end=doc.get('period_end') or task['created_at'][:10],document_id=doc['document_id']))
-        gaps=[doc['document_id']+':'+g for doc,check in zip(docs,checks) for g in check['gaps']]
+        data=financial_data(task) if financial_data else {}
+        gaps=[doc['document_id']+':'+g for doc,check in zip(docs,checks) for g in check['gaps']]+data.get('gaps',[])
         if any(not check['input_complete'] for check in checks):
             raise StageWait('waiting_source',gaps)
         return dict(issuer_id=task['issuer_id'],status='partial' if gaps or prior['gaps'] else 'ready',documents=docs,coverage=checks,
-            gaps=gaps+prior['gaps'],prior_context=prior['items'],context_version=digest(prior['items']))
+            gaps=gaps+prior['gaps'],prior_context=prior['items'],context_version=digest(prior['items']),financial_data=data)
     def retrieve(payload,task):
         if retrieval:return retrieval(payload,task)
         p=task['profile'];inventory=p.get('broker_inventory',[])
         return run_retrieval(plan_retrieval({'issuer_id':task['issuer_id'],'question':p['research_question'],
             'as_of':task['created_at'],'queries':[]},inventory,limits={'max_reports':p.get('max_broker_reports',5)}),{},store)
     def model(payload,task):
-        if select_model_template(task['profile'])['status']!='supported':
-            return dict(issuer_id=task['issuer_id'],status='partial',gaps=['unsupported_template'],model=None)
         raw=infer('model',payload,task);allowed=evidence_ids(payload)
+        provider_docs=payload['coverage'].get('financial_data',{}).get('evidence_documents',[])
+        all_fact_docs=[*payload['coverage']['documents'],*provider_docs,*payload.get('retrieval',{}).get('reports',[])]
         for fact in raw.get('facts',[]):
             if fact.get('issuer_id')!=task['issuer_id']:
                 raise StageWait('quality_blocked',['reported_fact_issuer_mismatch'])
-            doc=next((d for d in payload['coverage']['documents'] if d['revision_id']==fact.get('source_ref')),None)
+            doc=next((d for d in all_fact_docs if d['revision_id']==fact.get('source_ref')),None)
             quote=fact.get('quote','')
             if not doc or not quote or not any(quote in p['text'] for p in doc['pages']):
                 raise StageWait('quality_blocked',['reported_fact_quote_not_in_original'])
             numeric=[float(x) for x in re.findall(r'[-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?',quote.replace(',',''))]
             if not number(fact.get('value')) or not any(abs(x-fact['value'])<=max(1e-8,abs(fact['value'])*1e-10) for x in numeric):
                 raise StageWait('quality_blocked',['reported_fact_value_not_in_quote'])
+            if doc.get('evidence_kind')=='reported_provider' and (fact.get('kind')!='reported_provider'
+                    or any(fact.get(k)!=doc.get(k) for k in ('currency','scope','period_end'))):
+                raise StageWait('quality_blocked',['provider_fact_dimensions_or_origin_differ'])
+            if doc in payload.get('retrieval',{}).get('reports',[]) and fact.get('kind')!='reported_broker':
+                raise StageWait('quality_blocked',['broker_history_cannot_be_primary_fact'])
         for a in raw.get('assumptions',[]):
             if not set(a.get('source_refs',[]))<=allowed:raise StageWait('quality_blocked',['assumption_source_not_read'])
         brokers={d.get('revision_id'):d for d in payload.get('retrieval',{}).get('reports',[])}
@@ -134,6 +140,10 @@ def build_adapters(*,store,drive,reports,env,documents,reasoner=None,baseline=No
         if candidate.get('model') and candidate['model']['issuer_id']!=task['issuer_id']:
             raise StageWait('quality_blocked',['computed_model_issuer_mismatch'])
         candidate['candidate_status']=candidate['status'];candidate['status']='ready' if candidate.get('model') and candidate['model']['status']=='ready_for_review' else 'partial'
+        from research.existing_data import broker_history
+        candidate['historical_tables']=payload['coverage'].get('financial_data',{}).get('historical_tables',[])
+        if task['profile']['market'] in {'HK','US'}:
+            candidate['historical_tables']=broker_history(raw.get('historical_statements',[]),list(brokers.values()),task['profile'],as_of=task.get('updated_at',task['created_at'])[:10])
         candidate['issuer_id']=task['issuer_id'];return candidate
     def judgment(payload,task):
         result=infer('judgment',payload,task);validate_requests(result.get('data_requests',[]))
@@ -162,10 +172,19 @@ def build_adapters(*,store,drive,reports,env,documents,reasoner=None,baseline=No
         task['presentation_version']=2
         analysis=dict(report=r,model_snapshot=model,actual_model=history[-1]['actual_model'],provider=history[-1]['provider'],
             validation={'status':'ready_for_review' if model else 'pending_model'},
+            historical_tables=payload['model'].get('historical_tables',[]),
+            financial_gaps=payload['coverage'].get('financial_data',{}).get('gaps',[]),
+            market_snapshot=payload['coverage'].get('financial_data',{}).get('market_snapshot'),
             forecast_comparison=payload['model'].get('comparison',{}),
             source_index=[dict(revision_id=d['revision_id'],document_id=d.get('document_id',str(d.get('report_id'))),
                 url=d.get('source',{}).get('url')) for d in [*payload['coverage']['documents'],*payload.get('retrieval',{}).get('reports',[])]])
         files=task.setdefault('publication_files',{})
+        data=payload['coverage'].get('financial_data',{})
+        if data.get('workbook'):files['financial_workbook']=data['workbook']
+        if data.get('archive'):files['financial_data']=data['archive']
+        if data.get('evidence_documents'):
+            analysis['source_index'].append(dict(revision_id=digest(data['evidence_documents']),document_id='Tushare逐字段来源行及revision_id见历史三表底稿',
+                url=data['archive'].get('url')))
         for key,value in [('source',payload['coverage']),('result',analysis),('model',model)]:
             if value is not None and key not in files:files[key]=archive('publication-'+key,value,task);store.put(task)
         if model and 'model_workbook' not in files:

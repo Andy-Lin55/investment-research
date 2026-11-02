@@ -11,7 +11,7 @@ def discover_events(profiles: list[dict], *, store, adapters: dict, as_of: str) 
         for source in profile['sources']:
             key='v17:scan:'+digest([issuer,source]);old=store.get(key) or {}
             last=old.get('covered_until')
-            start=(date.fromisoformat(last)-timedelta(days=21) if last else end-timedelta(days=365)).isoformat()
+            start=(date.fromisoformat(last)-timedelta(days=21) if last else end-timedelta(days=21)).isoformat()
             try:
                 if source not in adapters:raise ValueError('configured source unavailable')
                 result=adapters[source](profile,start,as_of)

@@ -57,13 +57,13 @@ def test_assumptions_without_rationale_or_outside_supported_range_are_rejected()
 
 
 def test_different_profit_bases_and_consensus_owners_are_not_merged():
-    own=dict(metric='parent_net_income',period_end='2027-12-31',currency='CNY',unit='CNY',
+    own=dict(issuer_id='issuer-a',metric='parent_net_income',period_end='2027-12-31',currency='CNY',unit='CNY',
         accounting_basis='statutory_parent',scope='consolidated',share_basis='weighted_average',value=300,
         estimate_owner='own',source_ref='candidate')
     broker=dict(own,value=250,estimate_owner='broker',source_ref='broker-p2')
     incompatible=dict(broker,accounting_basis='ModelWare',value=220)
     consensus=dict(broker,value=270,estimate_owner='Refinitiv_consensus')
-    out=api().compare_forecasts({'estimates':[own]},[broker,incompatible,consensus])
+    out=api().compare_forecasts({'estimates':[own],'admitted_source_refs':['broker-p2']},[broker,incompatible,consensus])
     assert len(out['comparable'])==2 and len(out['incomparable'])==1
     assert out['comparable'][0]['absolute_difference']==50
     assert out['comparable'][1]['estimate_owner']=='Refinitiv_consensus'

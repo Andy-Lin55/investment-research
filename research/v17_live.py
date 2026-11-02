@@ -6,7 +6,7 @@ from financials.forecast import digest
 from research import sources
 from research.delivery import NotionTaskStore,NotionReports,ServiceError
 from research.financial_coverage import FULL
-from research.workflow import StageWait,control,company_state,plan_task,advance_task
+from research.workflow import StageWait,InputsChanged,control,company_state,plan_task,advance_task
 from research.profiles import resolve_profile
 from research.discovery import discover_events
 
@@ -189,12 +189,13 @@ class OfficialSource:
             latest=self.metadata(task['profile'],start,now)
             before=task.get('source_snapshot',{})
             if any(before.get(r['document_id'])!=r['metadata_revision'] for r in latest):
-                raise ValueError('new or revised official disclosure')
+                raise InputsChanged('new_or_revised_official_disclosure')
             known={d['document_id']:d for d in payload['coverage']['documents']}
             for row in sorted(latest,key=lambda r:r['published_at'],reverse=True)[:3]:
                 if row['document_id'] in known:
                     _,fresh=self.original(task['profile'],row,force=True)
-                    if fresh['revision_id']!=known[row['document_id']]['revision_id']:raise ValueError('source bytes revised')
+                    if fresh['revision_id']!=known[row['document_id']]['revision_id']:raise InputsChanged('official_source_bytes_revised')
+        except InputsChanged:raise
         except Exception:
             raise StageWait('waiting_source',['prepublication_source_check_failed_or_stale']) from None
 
@@ -251,7 +252,7 @@ def run(args,env):
     store=NotionTaskStore(http,env['RESEARCH_NOTION_TASKS_SOURCE_ID'],content_loader=lambda ref:drive.read(ref['path'])[0])
     if args.mode=='local':
         from research.local import run_local_queue
-        result=run_local_queue(store,drive,limit=args.limit);print(json.dumps(result));return 0
+        result=run_local_queue(store,drive,limit=args.limit,workflow_contract='holdings-v17');print(json.dumps(result));return 0
     roster=active_roster(http,env,registry(env,drive));profiles=[];gaps=list(roster['unmapped'])
     feeds=json.loads(env.get('RESEARCH_OFFICIAL_FEEDS_JSON','[]'))
     for holding in roster['holdings']:
@@ -281,7 +282,7 @@ def run(args,env):
             prior_context=lambda task:load_prior_context(task['profile'],drive,http))
         active={p['issuer_id'] for p in profiles};result={}
         candidates=[t for t in store.list() if t.get('workflow_contract')=='holdings-v17' and t['issuer_id'] in active
-            and t.get('record_type')=='research_task' and t['status'] not in {'completed','no_change','quality_blocked','baseline_conflict'}
+            and t.get('record_type')=='research_task' and t['status'] not in {'completed','no_change','superseded','quality_blocked','baseline_conflict'}
             and not(t['status']=='partial' and t.get('next_state'))]
         for task in sorted(candidates,key=lambda t:(t['priority'],t.get('last_attempted_at',''),t['created_at']))[:args.limit]:
             task['last_attempted_at']=datetime.now(timezone.utc).isoformat();task['updated_at']=now;store.put(task)
@@ -289,4 +290,5 @@ def run(args,env):
             result[outcome['status']]=result.get(outcome['status'],0)+1
     if gaps:result['coverage_gaps']=len(gaps)
     print(json.dumps(result,ensure_ascii=False))
-    return 1 if gaps or result.get('gaps') else 0
+    blocked={'waiting_budget','waiting_source','retryable_failure','quality_blocked','baseline_conflict','partial'}
+    return 1 if gaps or result.get('gaps') or any(result.get(state,0) for state in blocked) else 0

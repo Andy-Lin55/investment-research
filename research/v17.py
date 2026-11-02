@@ -16,7 +16,8 @@ def encoded(value):return json.dumps(value,ensure_ascii=False,sort_keys=True,all
 
 def reason(stage,payload,task,*,store,drive,providers,now):
     prompt=stage_prompt(stage,payload,task);round_id=task.get('retrieval_round',0)
-    path=task['company_path']+'/04_研究底稿/v17/'+task['task_id'].split(':')[-1]+'/'+stage+'-'+str(round_id)
+    generation=task.get('input_generation',0)
+    path=task['company_path']+'/04_研究底稿/v17/'+task['task_id'].split(':')[-1]+'/'+stage+'-'+str(round_id)+'-g'+str(generation)
     input_ref=drive.put_immutable(path+'/request.json',encoded({'contract':'holdings-v17','prompt':prompt,'input_digest':digest(prompt)}))
     if input_ref.get('verified') is not True:raise ValueError('prompt archive not verified')
     if task['kind']=='weekly_deep':
@@ -39,7 +40,7 @@ def reason(stage,payload,task,*,store,drive,providers,now):
         if any(not number(x) or x<0 for x in rates):continue
         ceiling=((len(prompt.encode())+256)*rates[0]+12000*rates[1])/1e6
         if ceiling<=0:continue
-        attempt_id=task['task_id']+':'+stage+':'+str(round_id)
+        attempt_id=task['task_id']+':'+stage+':'+str(round_id)+':g'+str(generation)
         fresh=store.get(task['task_id'])
         old=next((a for a in fresh['attempts'] if a['attempt_id']==attempt_id),None)
         if old:raise StageWait('waiting_budget',['prior_attempt_needs_confirmation'])
@@ -110,6 +111,8 @@ def build_adapters(*,store,drive,reports,env,documents,reasoner=None,baseline=No
             return dict(issuer_id=task['issuer_id'],status='partial',gaps=['unsupported_template'],model=None)
         raw=infer('model',payload,task);allowed=evidence_ids(payload)
         for fact in raw.get('facts',[]):
+            if fact.get('issuer_id')!=task['issuer_id']:
+                raise StageWait('quality_blocked',['reported_fact_issuer_mismatch'])
             doc=next((d for d in payload['coverage']['documents'] if d['revision_id']==fact.get('source_ref')),None)
             quote=fact.get('quote','')
             if not doc or not quote or not any(quote in p['text'] for p in doc['pages']):
@@ -119,9 +122,17 @@ def build_adapters(*,store,drive,reports,env,documents,reasoner=None,baseline=No
                 raise StageWait('quality_blocked',['reported_fact_value_not_in_quote'])
         for a in raw.get('assumptions',[]):
             if not set(a.get('source_refs',[]))<=allowed:raise StageWait('quality_blocked',['assumption_source_not_read'])
+        brokers={d.get('revision_id'):d for d in payload.get('retrieval',{}).get('reports',[])}
+        for estimate in raw.get('broker_estimates',[]):
+            doc=brokers.get(estimate.get('source_ref'));quote=estimate.get('quote','')
+            if (estimate.get('issuer_id')!=task['issuer_id'] or not doc or not quote
+                    or not any(quote in p['text'] for p in doc.get('pages',[]))):
+                raise StageWait('quality_blocked',['broker_estimate_identity_or_source_not_verified'])
         candidate=build_candidate_inputs(raw.get('facts',[]),raw.get('guidance',[]),raw.get('broker_estimates',[]),
             raw.get('assumptions',[]),prior_baseline=task['previous_state'].get('accepted_baseline'),
-            as_of=task.get('updated_at',task['created_at'])[:10],profile=task['profile'])
+            as_of=task.get('updated_at',task['created_at'])[:10],profile=task['profile'],admitted_source_refs=list(brokers))
+        if candidate.get('model') and candidate['model']['issuer_id']!=task['issuer_id']:
+            raise StageWait('quality_blocked',['computed_model_issuer_mismatch'])
         candidate['candidate_status']=candidate['status'];candidate['status']='ready' if candidate.get('model') and candidate['model']['status']=='ready_for_review' else 'partial'
         candidate['issuer_id']=task['issuer_id'];return candidate
     def judgment(payload,task):
@@ -151,7 +162,9 @@ def build_adapters(*,store,drive,reports,env,documents,reasoner=None,baseline=No
         task['presentation_version']=2
         analysis=dict(report=r,model_snapshot=model,actual_model=history[-1]['actual_model'],provider=history[-1]['provider'],
             validation={'status':'ready_for_review' if model else 'pending_model'},
-            source_index=[dict(revision_id=d['revision_id'],document_id=d['document_id'],url=d.get('source',{}).get('url')) for d in payload['coverage']['documents']])
+            forecast_comparison=payload['model'].get('comparison',{}),
+            source_index=[dict(revision_id=d['revision_id'],document_id=d.get('document_id',str(d.get('report_id'))),
+                url=d.get('source',{}).get('url')) for d in [*payload['coverage']['documents'],*payload.get('retrieval',{}).get('reports',[])]])
         files=task.setdefault('publication_files',{})
         for key,value in [('source',payload['coverage']),('result',analysis),('model',model)]:
             if value is not None and key not in files:files[key]=archive('publication-'+key,value,task);store.put(task)

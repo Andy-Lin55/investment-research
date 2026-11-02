@@ -80,3 +80,15 @@ def test_v17_native_report_displays_logic_and_computed_forecasts():
     text=json.dumps(blocks,ensure_ascii=False)
     assert '回报可持续' in text and '217.50' in text and '26.10' in text
     assert 'AI研究更新' in text
+
+
+def test_report_body_displays_program_compared_broker_values_and_unexplained_difference():
+    from research.report_view import render
+    task=plan_task(event(),resolve_profile(profile(),{}),{},as_of='2026-11-02')
+    result={'report':report(),'actual_model':'SYNTHETIC','provider':'offline','model_snapshot':None,
+        'forecast_comparison':{'comparable':[{'metric':'parent_net_income','period_end':'2027-12-31',
+          'currency':'CNY','estimate_owner':'Broker A','value':250,'own_value':300,'absolute_difference':50,
+          'unexplained_difference':50,'source_ref':'broker-p2'}],'incomparable':[{'reason':'ModelWare basis unmatched'}]}}
+    text=json.dumps(render(task,result,{}),ensure_ascii=False)
+    assert '250.00' in text and '300.00' in text and '50.00' in text
+    assert 'Broker A' in text and '未解释' in text and 'ModelWare basis unmatched' in text

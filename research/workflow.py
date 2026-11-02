@@ -14,6 +14,21 @@ class StageWait(RuntimeError):
         self.status=status;self.gaps=list(gaps);super().__init__(status)
 
 
+class InputsChanged(StageWait):
+    def __init__(self,reason):super().__init__('waiting_source',[reason])
+
+
+def invalidate_inputs(task,reason,*,previous=None):
+    task.setdefault('stage_history',[]).append(dict(reason=reason,stage_refs=deepcopy(task['stage_refs']),
+        input_digest=task['input_digest'],publication_files=deepcopy(task.get('publication_files',{}))))
+    if previous is not None:task['previous_state']=deepcopy(previous)
+    task['input_generation']=task.get('input_generation',0)+1
+    task['input_digest']=digest([task['trigger'],task['profile'],task['previous_state'],task['input_generation']])
+    task.update(stage_refs={},checkpoints={},retrieval_round=0,research_status=None)
+    for key in ('publication_files','publication_attempted','unresolved_data_requests','retrieval_requests'):
+        task.pop(key,None)
+
+
 def control(key,issuer,**values):
     return dict(task_id=key,issuer_id=issuer,kind='manual',record_type='control',status='pending',
                 charges=[],attempts=[],checkpoints={},**values)
@@ -59,11 +74,19 @@ def build_next_state(previous: dict, result: dict, *, manifest: dict) -> dict:
 def advance_task(task_id: str, *, store, adapters: dict, now: str) -> dict:
     date.fromisoformat(now);task=store.get(task_id)
     if not task or task.get('workflow_contract')!='holdings-v17':raise ValueError('v17 durable task required')
-    if task['status'] in {'completed','no_change'} or task.get('next_state') and task['status']=='partial':return task
+    if task['status'] in {'completed','no_change','superseded'} or task.get('next_state') and task['status']=='partial':return task
     payload={'event':deepcopy(task['trigger']),'profile':task['profile'],'previous':task['previous_state']}
     def save(status,**fields):
         task.update(status=status,updated_at=now,**fields);store.put(task);return task
     try:
+        current=company_state(store,task['issuer_id'])
+        if current and current!=task['previous_state']:
+            if current.get('accepted_baseline')!=task['previous_state'].get('accepted_baseline'):
+                return save('baseline_conflict')
+            if task.get('publication_attempted'):
+                return save('superseded',superseded_by=current.get('last_published_research'))
+            invalidate_inputs(task,'newer_published_research',previous=current)
+            payload['previous']=deepcopy(current);store.put(task)
         for stage in STAGES:
             task['running_stage']=stage
             if stage in task['stage_refs']:
@@ -101,6 +124,12 @@ def advance_task(task_id: str, *, store, adapters: dict, now: str) -> dict:
         if 'baseline' not in adapters:raise StageWait('waiting_source',['baseline_check_unavailable'])
         if adapters['baseline'](task)!=expected:return save('baseline_conflict')
         if 'prepublish' in adapters:adapters['prepublish'](payload,task)
+        current=company_state(store,task['issuer_id'])
+        if current and current!=task['previous_state']:
+            if current.get('accepted_baseline')!=task['previous_state'].get('accepted_baseline'):
+                return save('baseline_conflict')
+            invalidate_inputs(task,'research_state_changed_before_publication',previous=current)
+            return save('waiting_source',gaps=['research_state_changed_before_publication'])
         if 'publication' not in task['checkpoints']:
             if 'publish' not in adapters:raise StageWait('waiting_source',['publication_adapter_missing'])
             manifest=adapters['publish'](payload,task)
@@ -116,5 +145,7 @@ def advance_task(task_id: str, *, store, adapters: dict, now: str) -> dict:
             return save('baseline_conflict')
         store.put(control('v17:company:'+task['issuer_id'],task['issuer_id'],research_state=new))
         return save('partial' if task.get('research_status')=='partial' else 'completed',next_state=new)
+    except InputsChanged as error:
+        invalidate_inputs(task,error.gaps[0]);return save('waiting_source',gaps=error.gaps)
     except StageWait as error:return save(error.status,gaps=error.gaps)
     except Exception as error:return save('retryable_failure',last_error_type=type(error).__name__)

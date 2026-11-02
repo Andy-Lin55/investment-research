@@ -10,10 +10,23 @@ def render(task,result,files):
     blocks.append(table(['逻辑','变化与依据','证伪条件'],[[x['claim'],x['change']+'：'+x['reason'],x['falsifier']] for x in r['holding_logic']]))
     blocks.extend([block('heading_2','核心分歧与自己的判断'),block('paragraph',r['key_disagreement']),
         table(['指标／期间','差异解释／缺口','可比状态'],[[x['metric'],x['reason'],x['status']] for x in r['earnings_differences']])])
+    comparison=result.get('forecast_comparison',{})
+    if comparison.get('comparable'):
+        blocks.append(block('heading_3','自有预测与机构预期对照'))
+        rows=comparison['comparable']
+        for offset in range(0,len(rows),30):
+            blocks.append(table(['指标／期间／币种','预测所有者','机构值','自有值','差异','未解释差异'],
+                [[x['metric']+'/'+x['period_end']+'/'+x['currency'],x['estimate_owner'],value(x['value']),
+                  value(x['own_value']),value(x['absolute_difference']),value(x['unexplained_difference'])] for x in rows[offset:offset+30]]))
+    if comparison.get('incomparable'):
+        blocks.append(block('paragraph','不可比／未准入预测：'+'；'.join(x.get('reason','dimensions not aligned') for x in comparison['incomparable'])))
+    if not comparison.get('comparable'):
+        blocks.append(block('paragraph','尚无通过主体、期间、币种及会计口径核对的机构数值；不据此声称全市场预期。'))
     model=result.get('model_snapshot')
     if model and model.get('scenarios'):
         blocks.append(block('heading_2','自有预测与情景估值'))
-        for case,rows in model['scenarios'].items():
+        for case in ('base','bull','bear'):
+            rows=model['scenarios'][case]
             blocks.append(block('heading_3',case+'｜'+model['currency']+' 原币；研究假设 F'))
             metrics=[('收入',lambda y:y['income']['revenue']),('归母净利',lambda y:y['income']['parent_net_income']),
                 ('EPS',lambda y:y['income']['eps']),('经营现金流',lambda y:y['cashflow']['operating']),
@@ -23,6 +36,8 @@ def render(task,result,files):
             blocks.append(table(['指标',*[str(y['year'])+'F' for y in rows]],[[label,*[value(fn(y)) for y in rows]] for label,fn in metrics]))
     else:blocks.append(block('quote','模型或关键输入待补；保留已有研究、具体缺口与下一验证点，不将空缺按零。'))
     blocks.append(block('paragraph',r['valuation_reason']))
+    if not result.get('market_snapshot'):
+        blocks.append(block('paragraph','未取得可核验的同币种、同股类当前价格快照；情景估值不等于当前上涨／下跌空间。'))
     for field,title in [('changes','变化及影响'),('counterevidence','反证与替代解释')]:
         blocks.append(block('heading_2',title))
         for item in r[field]:blocks.append(block('bulleted_list_item',item['text']+'｜证据：'+', '.join(item['evidence'])))

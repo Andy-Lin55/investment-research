@@ -28,7 +28,8 @@ def run_retrieval(plan: dict, adapters: dict, journal) -> dict:
         key=row['original_sha256']
         if key not in seen and len(reports)<cap:seen.add(key);reports.append(deepcopy(row))
     def operation(kind,request):
-        identity=[issuer,kind,request]+([plan['plan_id']] if kind=='search' else [])
+        identity=[issuer,plan['brief'].get('provider','fxbaogao'),kind,
+                  str(request['report_id']) if kind=='acquire' else request]+([plan['plan_id']] if kind=='search' else [])
         key='v17:source-operation:'+digest(identity);cached=journal.get(key)
         if cached:
             if cached['operation_status']=='complete':counts['reused']+=1;return cached['result']

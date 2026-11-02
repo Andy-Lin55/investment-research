@@ -89,6 +89,10 @@ def sec(ticker,start,end,request=public_json):
 
 
 def document_type(title,form=None):
+    if re.search(r'摘要|SUMMARY',title,re.I):
+        if re.search(r'半年|中期|INTERIM',title,re.I):return '中期报告摘要'
+        if re.search(r'季度|QUARTER',title,re.I):return '季度报告摘要'
+        if re.search(r'年度|年报|ANNUAL',title,re.I):return '年度报告摘要'
     if form in {'10-K','10-Q','20-F','10-K/A','10-Q/A','20-F/A'}:return form
     if re.search(r'业绩预告修正|業績預告修正',title):return '业绩预告修正'
     if re.search(r'业绩预告|業績預告|PROFIT WARNING',title,re.I):return '业绩预告'

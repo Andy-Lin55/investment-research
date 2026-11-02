@@ -4,12 +4,17 @@ from pathlib import PurePosixPath
 from research.delivery import ServiceError
 
 
-def run_local_queue(store,drive,*,limit,subscription=None,subscription_config=None):
+def run_local_queue(store,drive,*,limit,subscription=None,subscription_config=None,workflow_contract=None):
     if os.getenv('GITHUB_ACTIONS')=='true' or os.getenv('CI','').lower()=='true':
         raise ValueError('subscription credentials are local only')
     counts=dict(candidates=0,reused_candidates=0,waiting_subscription=0,waiting_context=0,conflicts=0)
-    tasks=[t for t in store.list() if t['kind']=='weekly_deep' and t['status']!='completed']
-    for task in tasks[:limit]:
+    tasks=[t for t in store.list() if t['kind']=='weekly_deep'
+        and t.get('workflow_contract')==workflow_contract
+        and t['status'] not in {'completed','published','superseded','quality_blocked','baseline_conflict'}
+        and not(t['status']=='partial' and t.get('next_state'))]
+    attempted=0
+    for task in tasks:
+        if attempted>=limit:break
         ref=task['checkpoints'].get('request')
         if not ref:counts['waiting_context']+=1;continue
         request=json.loads(drive.read(ref['path'])[0])
@@ -27,6 +32,7 @@ def run_local_queue(store,drive,*,limit,subscription=None,subscription_config=No
         if subscription is None:
             from research.subscription import call_subscription
             subscription=lambda prompt:call_subscription(prompt,**(subscription_config or {}))
+        attempted+=1
         try:content=subscription(request['prompt'])
         except Exception:content=''
         if not content:counts['waiting_subscription']+=1;continue

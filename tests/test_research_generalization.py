@@ -95,3 +95,48 @@ def test_broker_acquisition_bound_is_configurable_without_creating_unlimited_dow
     for i in range(4):assert client.download(i+1).startswith(b'%PDF')
     with pytest.raises(BrokerError):client.download(5)
     assert len(charged)==4
+
+
+@pytest.mark.parametrize('issuer,year,ticker',[('migration-a',2026,'000001.SZ'),('migration-b',2028,'09999.HK')])
+def test_different_company_and_year_complete_through_real_durable_adapters_after_lost_response(issuer,year,ticker):
+    from tests.test_research_end_to_end import Notion
+    from tests.test_research_delivery import FakeHTTP
+    from research.delivery import GraphDrive,NotionReports,NotionTaskStore
+    from tests.test_forecast_inputs import facts,assumptions
+    http=Notion();drive=GraphDrive(FakeHTTP());store=NotionTaskStore(http,'tasks')
+    p=resolve_profile(profile(issuer,ticker),{})
+    as_of=f'{year}-11-02';ev=dict(event(),issuer_id=issuer,published_at=f'{year}-10-30')
+    task=plan_task(ev,p,{},as_of=as_of);store.put(task)
+    f=facts()
+    for row in f:
+        row.update(issuer_id=issuer,period_end=f'{year-1}-12-31',source_ref='source-'+issuer,
+                   source_locator='original p77',quote=row['field']+'='+str(row['value']))
+    a=assumptions()
+    for row in a:row.update(year=year,source_refs=['source-'+issuer])
+    document=dict(issuer_id=issuer,document_id='filing-'+issuer,revision_id='source-'+issuer,
+        document_type='公告',published_at=f'{year}-10-30',period_end=f'{year-1}-12-31',
+        source={'url':'https://static.cninfo.com.cn/synthetic.pdf'},
+        pages=[{'page':77,'text':'\n'.join(x['quote'] for x in f)}])
+    calls=[]
+    def infer(stage,payload,t):
+        calls.append(stage)
+        if stage=='model':return {'facts':f,'assumptions':a,'guidance':[],'broker_estimates':[]}
+        if stage=='judgment':return {'data_requests':[]}
+        r=report()
+        for key in ('holding_logic','earnings_differences','changes','counterevidence','next_actions'):
+            for item in r[key]:item['evidence']=['source-'+issuer]
+        r['next_actions'][0]['due']=f'{year}-11-20';r['questions'][0]['due']=f'{year}-11-20'
+        return r
+    adapters=build_adapters(store=store,drive=drive,reports=NotionReports(http,'reports'),env={},
+        documents=lambda t:[document],reasoner=infer,baseline=lambda t:None)
+    first=advance_task(task['task_id'],store=store,adapters=adapters,now=as_of)
+    assert first['status']=='retryable_failure'
+    # Rebuild the durable store and stage adapter: no in-memory analysis survives.
+    cold=NotionTaskStore(http,'tasks');adapters=build_adapters(store=cold,drive=drive,
+        reports=NotionReports(http,'reports'),env={},documents=lambda t:[document],reasoner=infer,baseline=lambda t:None)
+    out=advance_task(task['task_id'],store=cold,adapters=adapters,now=as_of)
+    assert out['status']=='partial' and calls==['model','judgment','report']
+    saved=company_state(cold,issuer)
+    assert saved['last_published_research']['verified'] is True
+    assert saved['source_revisions']=={'filing-'+issuer:'source-'+issuer}
+    assert len([x for x in http.rows.values() if x['parent']['data_source_id']=='reports'])==1

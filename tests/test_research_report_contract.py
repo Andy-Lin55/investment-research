@@ -88,3 +88,19 @@ def test_long_originals_are_indexed_but_all_required_financial_pages_reach_model
     assert 'consolidated income full table' in prompt and 'consolidated cash full table' in prompt
     assert 'receivable_days' in prompt and 'other_liabilities' in prompt
     assert 'omitted_pages' in prompt
+
+
+def test_historical_corpus_does_not_crowd_out_current_filing_and_latest_annual_baseline():
+    task=plan_task(event(),resolve_profile(profile(),{}),{},as_of='2026-11-02');p=payload()
+    docs=[];checks=[]
+    for year in (2022,2023,2024,2025):
+        docs.append({'document_id':str(year),'revision_id':str(year),'document_type':'年度报告',
+            'published_at':str(year+1)+'-03-01','pages':[{'page':1,'text':str(year)+' complete annual table '+'A'*20000}]})
+        checks.append({'document_id':str(year),'statements':{'balance':{'pages':[1]}}})
+    docs.append({'document_id':'current','revision_id':'current','document_type':'季度报告',
+        'published_at':'2026-11-01','pages':[{'page':8,'text':'CURRENT full financial tables'+'B'*15000}]})
+    checks.append({'document_id':'current','statements':{'balance':{'pages':[8]}}})
+    p['coverage'].update(documents=docs,coverage=checks)
+    prompt=api().stage_prompt('model',p,task)
+    assert '2025 complete annual table' in prompt and 'CURRENT full financial tables' in prompt
+    assert len(prompt)<160000 and '2022 complete annual table' not in prompt

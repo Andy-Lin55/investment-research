@@ -26,10 +26,21 @@ def compact_material(payload,task):
     out=deepcopy(payload);coverage=out.get('coverage',{})
     index={c.get('document_id'):c for c in coverage.get('coverage',[])}
     terms=task['profile'].get('evidence_terms',[])+['现金','回款','利润','分部','存货','应收','股本','FORECAST','MODELWARE','CASH FLOW','EARNINGS']
-    remaining=70000
-    for doc in sorted(coverage.get('documents',[]),key=lambda d:d.get('published_at',''),reverse=True):
+    documents=coverage.get('documents',[]);ordered=sorted(documents,key=lambda d:d.get('published_at',''),reverse=True)
+    critical=set();families=[{'年度报告','10-K','20-F','10-K/A','20-F/A'},{'中期报告','半年度报告'},{'季度报告','10-Q','10-Q/A'}]
+    for family in families:
+        match=next((d for d in ordered if d.get('document_type') in family),None)
+        if match:critical.add(match.get('document_id'))
+    trigger_day=task['trigger'].get('published_at','')[:10]
+    critical.update(d.get('document_id') for d in ordered if d.get('published_at','')[:10]==trigger_day)
+    if ordered and not critical:critical.add(ordered[0].get('document_id'))
+    ordered.sort(key=lambda d:d.get('document_id') not in critical)
+    remaining=55000
+    for doc in ordered:
         required=set(p for s in index.get(doc.get('document_id'),{}).get('statements',{}).values() for p in s.get('pages',[]))
         pages=doc.get('pages',[]);chosen=[];chars=0
+        if doc.get('document_id') not in critical:
+            doc['omitted_pages']=[p['page'] for p in pages];doc['pages']=[];doc['body_status']='archived_historical_reference_not_sent';continue
         for page in pages:
             if page['page'] in required:
                 if chars+len(page['text'])>remaining:raise ValueError('complete required statement pages exceed prompt budget')
@@ -44,13 +55,15 @@ def compact_material(payload,task):
         doc['omitted_pages']=[p['page'] for p in pages if p not in chosen]
         doc['original_total_pages']=doc.get('total_pages',len(pages))
         remaining-=chars
-    for broker in out.get('retrieval',{}).get('reports',[]):
+    broker_reports=out.get('retrieval',{}).get('reports',[])
+    broker_limit=35000//max(1,len(broker_reports))
+    for broker in broker_reports:
         broker.pop('source_text',None);pages=broker.get('pages',[])
         ranked=sorted(pages,key=lambda p:(p['page']!=1,-sum(t.casefold() in p['text'].casefold() for t in terms),p['page']))
         selected=[];used=0
         for page in ranked:
             if len(selected)>=8:break
-            if used+len(page['text'])<=18000:selected.append(page);used+=len(page['text'])
+            if used+len(page['text'])<=broker_limit:selected.append(page);used+=len(page['text'])
         broker['pages']=sorted(selected,key=lambda p:p['page']);broker['omitted_pages']=[p['page'] for p in pages if p not in selected]
     for item in coverage.get('prior_context',[]):
         if item.get('source_text') and len(item['source_text'])>6000:

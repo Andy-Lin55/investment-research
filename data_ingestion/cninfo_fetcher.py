@@ -79,11 +79,14 @@ def fetch_announcements(
     days_back: int = 365,
     download_pdf: bool = True,
     keywords: list[str] | None = None,
+    *,
+    company_name: str | None = None,
 ) -> list[dict]:
     """
     从巨潮资讯拉取指定 A股股票公告。
     非A股 ticker 直接返回空列表。
     keywords: 关键词列表（各 keyword 单独搜索后合并去重），None 则用 ANNOUNCEMENT_KEYWORDS。
+    company_name: 调用方从标的名单取得的公司名；代码查询无精确命中时用于回退。
 
     返回：[{ticker, title, date, pdf_path, url}, ...]
     """
@@ -93,39 +96,46 @@ def fetch_announcements(
 
     kws = keywords if keywords is not None else ANNOUNCEMENT_KEYWORDS
     code = _parse_stock_code(ticker)
+    name = (company_name or "").strip()
 
     # 日期范围
     from datetime import date, timedelta
     end_date = date.today().strftime("%Y-%m-%d")
     start_date = (date.today() - timedelta(days=days_back)).strftime("%Y-%m-%d")
 
+    def query(searchkey: str) -> list[dict]:
+        time.sleep(REQUEST_INTERVAL_SECONDS)
+        resp = requests.post(
+            _CNINFO_QUERY,
+            headers=_HEADERS,
+            data={
+                "pageNum": 1,
+                "pageSize": 20,
+                "tabName": "fulltext",
+                "searchkey": searchkey,
+                "seDate": f"{start_date}~{end_date}",
+            },
+            timeout=15,
+        )
+        resp.raise_for_status()
+        return resp.json().get("announcements") or []
+
     seen_ids: set[str] = set()
     results: list[dict] = []
 
     for kw in kws:
         logger.info(f"抓取公告 [{ticker}] 关键词={kw}")
-        time.sleep(REQUEST_INTERVAL_SECONDS)
 
         try:
-            resp = requests.post(
-                _CNINFO_QUERY,
-                headers=_HEADERS,
-                data={
-                    "pageNum": 1,
-                    "pageSize": 20,
-                    "tabName": "fulltext",
-                    "searchkey": f"{code} {kw}",
-                    "seDate": f"{start_date}~{end_date}",
-                },
-                timeout=15,
-            )
-            resp.raise_for_status()
-            data = resp.json()
+            announcements = query(f"{code} {kw}")
+            if name and not any(str(a.get("secCode", "")) == code for a in announcements):
+                logger.info(f"[{ticker}] 代码查询无精确命中，回退公司名: {name} {kw}")
+                announcements = query(f"{name} {kw}")
         except Exception as e:
             logger.error(f"CNINFO 请求失败 [{ticker}] kw={kw}: {e}")
             continue
 
-        for ann in (data.get("announcements") or []):
+        for ann in announcements:
             ann_id = str(ann.get("announcementId", ""))
             sec_code = str(ann.get("secCode", ""))
             # 精确匹配股票代码（防止子公司公告混入）
@@ -157,12 +167,18 @@ def fetch_announcements(
     return results
 
 
-def fetch_periodic_reports(ticker: str, days_back: int = 365) -> list[dict]:
+def fetch_periodic_reports(
+    ticker: str, days_back: int = 365, *, company_name: str | None = None,
+) -> list[dict]:
     """专门获取年报/季报/业绩会材料/新闻稿（使用 PERIODIC_REPORT_KEYWORDS）"""
-    return fetch_announcements(ticker, days_back=days_back, keywords=PERIODIC_REPORT_KEYWORDS)
+    return fetch_announcements(
+        ticker, days_back=days_back, keywords=PERIODIC_REPORT_KEYWORDS, company_name=company_name,
+    )
 
 
-def batch_fetch(tickers: list[str], days_back: int = 3) -> dict[str, list[dict]]:
+def batch_fetch(
+    tickers: list[str], days_back: int = 3, *, company_names: dict[str, str] | None = None,
+) -> dict[str, list[dict]]:
     """批量抓取多只股票公告（并行5线程，自动跳过非A股）"""
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -170,7 +186,9 @@ def batch_fetch(tickers: list[str], days_back: int = 3) -> dict[str, list[dict]]
 
     def _fetch_one(ticker: str) -> tuple[str, list[dict]]:
         try:
-            return ticker, fetch_announcements(ticker, days_back=days_back)
+            return ticker, fetch_announcements(
+                ticker, days_back=days_back, company_name=(company_names or {}).get(ticker),
+            )
         except Exception as e:
             logger.error(f"批量抓取失败 [{ticker}]: {e}")
             return ticker, []

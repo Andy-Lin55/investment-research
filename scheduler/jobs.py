@@ -9,6 +9,7 @@ import os
 import subprocess
 import sys
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -389,13 +390,19 @@ def _job_daily_briefing(*, preview_only: bool = False) -> None:
         logger.info(f"今日（{today}）无重要新闻或公司第一手披露，跳过简报")
         return
 
+    primary_pages = [page for page in events if is_primary_disclosure(page)]
     primary_analyses = {}
-    for page in events:
-        if is_primary_disclosure(page):
-            result = analyze_disclosure(page)
-            primary_analyses[disclosure_key(page)] = result
-            log = logger.info if result.status == "complete" else logger.warning
-            log(f"第一手披露详解 [{disclosure_key(page)}]: {result.status}，{len(result.body)} 字")
+    if primary_pages:
+        worker_count = 4 if os.environ.get("GITHUB_ACTIONS") == "true" else 1
+        logger.info(f"第一手披露 {len(primary_pages)} 条，最多 {worker_count} 路同时解析")
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            pending = {executor.submit(analyze_disclosure, page): disclosure_key(page) for page in primary_pages}
+            for completed in as_completed(pending):
+                key = pending[completed]
+                result = completed.result()
+                primary_analyses[key] = result
+                log = logger.info if result.status == "complete" else logger.warning
+                log(f"第一手披露详解 [{key}]: {result.status}，{len(result.body)} 字")
     logger.info(f"简报事件 {len(events)} 条，第一手披露详解 {len(primary_analyses)} 条")
 
     # The overview cannot replace or truncate the independent disclosure sections.

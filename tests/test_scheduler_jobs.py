@@ -366,3 +366,36 @@ def test_briefing_preview_generates_body_without_calling_delivery(monkeypatch):
 
     render.assert_called_once_with("overview")
     send.assert_not_called()
+
+
+def test_cloud_briefing_analyzes_disclosures_in_parallel_and_keeps_every_result(monkeypatch):
+    from threading import Barrier
+    from data_ingestion import ai_client, disclosure_analysis
+    from notion_sync import notion_client_wrapper
+    from scheduler import briefing
+
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setattr(notion_client_wrapper, "get_client", Mock())
+    pages = [{"id": "earnings"}, {"id": "shareholder-meeting"}]
+    monkeypatch.setattr(briefing, "fetch_briefing_events", Mock(return_value=pages))
+    monkeypatch.setattr(disclosure_analysis, "is_primary_disclosure", Mock(return_value=True))
+    both_started = Barrier(2)
+
+    def analyze(page):
+        both_started.wait(timeout=3)
+        return disclosure_analysis.DisclosureAnalysis(page["id"], "complete")
+
+    monkeypatch.setattr(disclosure_analysis, "analyze_disclosure", analyze)
+    monkeypatch.setattr(ai_client, "call_ai", Mock(return_value="overview"))
+    build = Mock(return_value=SimpleNamespace(prompt="test", render=Mock(return_value="briefing body")))
+    monkeypatch.setattr(briefing, "build_daily_briefing", build)
+    send = Mock()
+    monkeypatch.setattr(jobs, "_send_briefing", send)
+
+    jobs._job_daily_briefing(preview_only=True)
+
+    assert build.call_args.args[0] == pages
+    assert {key: result.body for key, result in build.call_args.args[2].items()} == {
+        "earnings": "earnings", "shareholder-meeting": "shareholder-meeting",
+    }
+    send.assert_not_called()

@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from unittest.mock import Mock
 from zoneinfo import ZoneInfo
 
@@ -19,6 +19,7 @@ def announcement(title="嘉益股份：2026年三季度报告", code="301004", i
 
 @pytest.fixture
 def source(monkeypatch):
+    monkeypatch.setattr(cninfo_fetcher, "beijing_date", lambda: date(2026, 11, 2))
     monkeypatch.setattr(cninfo_fetcher, "REQUEST_INTERVAL_SECONDS", 0)
     download = Mock(return_value=True)
     monkeypatch.setattr(cninfo_fetcher, "_download_pdf", download)
@@ -132,7 +133,7 @@ def test_company_name_fallback_with_only_wrong_tickers_remains_empty(source):
     download.assert_not_called()
 
 
-def test_exact_code_hits_never_trigger_name_fallback_even_when_already_seen(source):
+def test_code_and_name_queries_are_merged_even_when_code_already_has_hits(source):
     post, download = source
     post.return_value = Mock(json=lambda: {"announcements": [announcement()]})
 
@@ -142,7 +143,7 @@ def test_exact_code_hits_never_trigger_name_fallback_even_when_already_seen(sour
 
     assert len(reports) == 1
     assert [c.kwargs["data"]["searchkey"] for c in post.call_args_list] == [
-        "301004 第三季度报告", "301004 季度报告",
+        "301004 第三季度报告", "嘉益股份 第三季度报告", "301004 季度报告", "嘉益股份 季度报告",
     ]
     download.assert_called_once()
 
@@ -183,7 +184,9 @@ def test_batch_optional_names_recover_reports_without_changing_legacy_calls(sour
     post, download = source
 
     def query(url, *, data, **kwargs):
-        hits = [announcement(title="嘉益股份：重大合同公告")] if data["searchkey"] == "嘉益股份 重大合同" else None
+        report = announcement(title="嘉益股份：重大合同公告")
+        report["announcementTime"] = int(datetime(2026, 10, 30, tzinfo=ZoneInfo("Asia/Shanghai")).timestamp() * 1000)
+        hits = [report] if data["searchkey"] == "嘉益股份 重大合同" else None
         return Mock(json=lambda: {"announcements": hits})
 
     post.side_effect = query

@@ -2,9 +2,14 @@ name: Daily Pipeline
 
 on:
   schedule:
-    # UTC 21:00 = 北京 05:00（次日），工作日运行；预留定时触发延迟
-    - cron: '0 21 * * 0-4'
+    # UTC 周日至周四 20:53 = 北京周一至周五 04:53，避开整点调度高峰。
+    - cron: '53 20 * * 0-4'
   workflow_dispatch:
+    inputs:
+      preview_only:
+        description: 'Run collection and generate the briefing without delivering it'
+        type: boolean
+        default: false
 
 # 公共环境变量，所有 job 共享
 env:
@@ -16,6 +21,7 @@ env:
   DMXAPI_KEY: ${{ secrets.DMXAPI_KEY }}
   GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  BRIEFING_PREVIEW_ONLY: ${{ inputs.preview_only && 'true' || 'false' }}
 
 jobs:
   # ── Job 1：A股公告（CNINFO + AI 解析）────────────────────────
@@ -33,8 +39,9 @@ jobs:
       - name: Run A-share announcements
         run: |
           python -c "
+          import os
           from scheduler.jobs import _job_fetch_and_parse
-          _job_fetch_and_parse()
+          _job_fetch_and_parse(trigger_research=os.environ['BRIEFING_PREVIEW_ONLY'] != 'true')
           "
 
   # ── Job 2：A股新闻（AKShare 东方财富）────────────────────────
@@ -61,6 +68,8 @@ jobs:
     name: HK/US Filings (HKEX + SEC)
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
     steps:
       - uses: actions/checkout@v4.1.7
       - uses: actions/setup-python@v5.0.0
@@ -105,6 +114,7 @@ jobs:
     # 即使某个数据 job 失败，仍发送简报（用已写入的数据）
     if: always()
     env:
+      SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
       FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}
       SMTP_HOST: ${{ secrets.SMTP_HOST }}
       SMTP_PORT: ${{ secrets.SMTP_PORT }}
@@ -122,6 +132,7 @@ jobs:
       - name: Send daily briefing
         run: |
           python -c "
+          import os
           from scheduler.jobs import _job_daily_briefing
-          _job_daily_briefing()
+          _job_daily_briefing(preview_only=os.environ['BRIEFING_PREVIEW_ONLY'] == 'true')
           "

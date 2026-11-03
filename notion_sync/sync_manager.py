@@ -9,9 +9,11 @@ import json
 from datetime import date, datetime
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlsplit
 
 import requests
 from loguru import logger
+from data_ingestion.disclosure_health import SourceFetchError
 from notion_client import APIResponseError
 
 from config.settings import (
@@ -60,35 +62,31 @@ def _idempotency_check(
 ) -> bool:
     """
     幂等检查：返回 True 表示已存在，跳过写入。
-    优先级1：同一 source_url 已存在（无论 event_type），最可靠
-    优先级2：同 ticker + event_type + date（回退检查）
+    有原文链接时按 ticker 和原文链接去重，兼容已入库的 HTTP/HTTPS 版本。
+    缺少可用链接时按 ticker、event_type 和 event_date 检查。
     """
-    # ── URL 级别去重（最可靠，防止同一文件以不同 event_type 重复写入）
-    # 泛域名 URL（如 https://www.cninfo.com.cn）不足以唯一标识文件，跳过
-    _GENERIC_URLS = {
-        "https://www.cninfo.com.cn", "http://www.cninfo.com.cn",
-        "https://www.hkexnews.hk", "http://www.hkexnews.hk",
-        "https://www.sec.gov", "http://www.sec.gov",
-    }
-    if source_url and source_url.rstrip("/") in _GENERIC_URLS:
-        source_url = ""   # 降级，不走 URL 检查
-
-    if source_url:
-        try:
-            res = client.databases.query(
-                database_id=db_id,
-                filter={
-                    "and": [
-                        {"property": "Ticker", "rich_text": {"equals": ticker}},
-                        {"property": "SourceURL", "url": {"equals": source_url}},
-                    ]
-                },
-            )
-            if res.get("results"):
-                logger.info(f"URL 幂等跳过：{ticker} SourceURL 已存在")
-                return True
-        except Exception:
-            pass  # URL 检查失败时降级到 type+date 检查
+    try:
+        url = urlsplit((source_url or "").strip())
+    except ValueError:
+        url = None
+    if url and url.scheme in {"http", "https"} and url.hostname and (url.path.strip("/") or url.query):
+        # Propagate lookup failures so callers never write an unchecked duplicate.
+        res = client.databases.query(
+            database_id=db_id,
+            filter={
+                "and": [
+                    {"property": "Ticker", "rich_text": {"equals": ticker}},
+                    {"or": [
+                        {"property": "SourceURL", "url": {"equals": url._replace(scheme=scheme).geturl()}}
+                        for scheme in ("http", "https")
+                    ]},
+                ],
+            },
+        )
+        if res["results"]:
+            logger.info(f"URL 幂等跳过：{ticker} SourceURL 已存在")
+            return True
+        return False
 
     # ── 回退：ticker + event_type + date
     try:
@@ -147,7 +145,7 @@ def get_active_tickers() -> list[str]:
     return tickers
 
 
-def get_daily_tickers(*, company_names: dict[str, str] | None = None) -> list[str]:
+def get_daily_tickers(*, company_names: dict[str, str] | None = None, strict: bool = False) -> list[str]:
     """获取 Active/Watch 股票；可选输出 company_names 复用同一批 Universe 记录的 Name。"""
     client = get_client()
     tickers = []
@@ -167,6 +165,8 @@ def get_daily_tickers(*, company_names: dict[str, str] | None = None) -> list[st
             if cursor:
                 kwargs["start_cursor"] = cursor
             res = notion_request_with_retry(client.databases.query, **kwargs)
+            if not isinstance(res.get("results"), list):
+                raise ValueError("Notion roster results missing")
             for page in res.get("results", []):
                 props = page.get("properties", {})
                 ticker_prop = props.get("Ticker", {}).get("rich_text", [])
@@ -185,6 +185,8 @@ def get_daily_tickers(*, company_names: dict[str, str] | None = None) -> list[st
         logger.info(f"获取到 {len(tickers)} 只股票（Active + Watch）")
     except Exception as e:
         logger.error(f"获取每日 tickers 失败: {e}")
+        if strict:
+            raise SourceFetchError("Notion daily roster read incomplete") from e
     return tickers
 
 
@@ -234,7 +236,7 @@ def create_event(ticker: str, parsed_data: dict) -> Optional[str]:
     event_date = parsed_data.get("event_date", _today_iso())
     event_type = parsed_data.get("event_type", "公告")
 
-    # 幂等检查（先 URL 级别，再 type+date 级别）
+    # 原文 URL 优先，缺少可用链接时按类型和日期检查。
     source_url = parsed_data.get("source_url") or ""
     if _idempotency_check(client, NOTION_EVENTS_DB_ID, ticker, event_type, event_date, source_url):
         logger.info(f"幂等跳过：{ticker} {event_type} {event_date} 已存在")

@@ -92,3 +92,27 @@ def test_report_body_displays_program_compared_broker_values_and_unexplained_dif
     text=json.dumps(render(task,result,{}),ensure_ascii=False)
     assert '250.00' in text and '300.00' in text and '50.00' in text
     assert 'Broker A' in text and '未解释' in text and 'ModelWare basis unmatched' in text
+
+
+def test_writer_requests_are_preserved_as_pending_followups():
+    from research.contract_v17 import defer_writer_requests
+    row={'kind':'sell_side_report','need':'核对更新的原文','why':'验证盈利预期差'}
+    raw={'research_status':'complete','data_requests':[row],'open_questions':['现有缺口'],'questions':[]}
+    final=defer_writer_requests(raw)
+    assert final['research_status']=='partial' and not final['data_requests']
+    assert final['unexecuted_requests']==[row] and final['questions'][0]['need']==row['need']
+    assert final['open_questions'][0]=='现有缺口' and row['why'] in final['open_questions'][1]
+    assert raw['data_requests']==[row]
+
+
+def test_unfunded_forecast_cannot_claim_complete_research():
+    import pytest
+    from research.contract_v17 import validate_report
+    p=resolve_profile(profile(),{})
+    t=plan_task(event(),p,{},as_of='2026-11-02')
+    r=report();r.update(research_question=p['research_question'],research_status='complete',valuation_status='pending')
+    refs={x for key in ('holding_logic','earnings_differences','changes','counterevidence','next_actions') for row in r[key] for x in row['evidence']}
+    payload={'coverage':{'status':'ready','documents':[{'revision_id':ref} for ref in refs]},
+             'model':{'model':{'status':'needs_model_review'}}}
+    with pytest.raises(ValueError,match='partial model or coverage'):
+        validate_report(r,payload,t)

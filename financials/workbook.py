@@ -90,7 +90,7 @@ def export_model(model):
         if standard:
             sheet.write(8,0,'净财务费用代理',label)
             for r,text in {60:'其他税前净损益',61:'其中：经营现金部分',62:'其中：投资现金部分',
-                           63:'其中：非现金部分',64:'加权平均股数假设'}.items():sheet.write(r-1,0,text,label)
+                           63:'其中：非现金部分',64:'加权平均股数假设',65:'股本与融资校验'}.items():sheet.write(r-1,0,text,label)
         for i,field in enumerate(BASE_FIELDS,2):
             sheet.write_formula(BASE_ROWS[field]-1,1,f'=Baseline!B{i}',numeric,model['baseline'][field])
         for col,period in enumerate(model['assumptions'][name],2):
@@ -125,9 +125,10 @@ def export_model(model):
             good=[f'{c}14>0',f'{c}40=0',f'MAX(C40:{c}40)=0',
                   f'MAX(C38:{c}39)<={tolerance}',f'MIN(C38:{c}39)>=-{tolerance}']
             if standard:
-                good.extend([f'MIN(C20:{c}21)>=0',f'MIN(C23:{c}23)>=0',f'{c}64>=MIN({p}26,{c}26)',
-                    f'{c}64<=MAX({p}26,{c}26)',f'{c}64>0',
-                    f'SIGN({a["equity_issuance"]})=SIGN({a["share_change"]})'])
+                share_checks=[f'{c}64>=MIN({p}26,{c}26)',f'{c}64<=MAX({p}26,{c}26)',f'{c}64>0',
+                    f'SIGN({a["equity_issuance"]})=SIGN({a["share_change"]})']
+                f[65]=f'AND({",".join(share_checks)})'
+                good.extend([f'MIN(C20:{c}21)>=0',f'MIN(C23:{c}23)>=0',f'COUNTIF(C65:{c}65,TRUE)=COLUMNS(C65:{c}65)'])
             f[44]=f'IF(AND({",".join(good)}),{c}14*{c}43,"")'
             caches={r:'' for r in f}
             if model['scenarios']:
@@ -138,7 +139,7 @@ def export_model(model):
                 caches.update({38:row['checks']['balance_difference'],39:row['checks']['cash_difference'],
                                40:row['funding_shortfall'],43:row['valuation']['multiple'],44:row['valuation']['price']})
                 if standard:caches.update({60:inc['other_pretax_income'],61:cf['other_income_operating'],
-                    62:cf['other_income_investing'],63:cf['other_income_noncash'],64:inc['weighted_average_shares']})
+                    62:cf['other_income_investing'],63:cf['other_income_noncash'],64:inc['weighted_average_shares'],65:True})
             for r,formula in f.items():
                 sheet.write_formula(r-1,col,'=IF(Assumptions!$G$2,'+formula+',"")',numeric,caches[r] if caches[r] is not None else '')
         last=xl_col_to_name(len(model['assumptions'][name])+1)

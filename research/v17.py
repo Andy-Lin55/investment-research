@@ -8,7 +8,7 @@ from financials.forecast import digest,number
 from research.runtime import Budget,BudgetBlocked
 from research.delivery import ServiceError
 from research.workflow import StageWait,advance_task,company_state,control,plan_task
-from research.contract_v17 import stage_prompt,validate_report,validate_requests,evidence_ids
+from research.contract_v17 import stage_prompt,validate_report,validate_requests,evidence_ids,defer_writer_requests
 
 
 def encoded(value):return json.dumps(value,ensure_ascii=False,sort_keys=True,allow_nan=False).encode()
@@ -158,7 +158,7 @@ def build_adapters(*,store,drive,reports,env,documents,reasoner=None,baseline=No
         result=infer('judgment',payload,task);validate_requests(result.get('data_requests',[]))
         return dict(result,issuer_id=task['issuer_id'],status='ready')
     def report(payload,task):
-        r=validate_report(infer('report',payload,task),payload,task)
+        r=validate_report(defer_writer_requests(infer('report',payload,task)),payload,task)
         if task.get('unresolved_data_requests'):r['research_status']='partial'
         return dict(r,issuer_id=task['issuer_id'],status='ready')
     def baseline_check(task):
@@ -199,7 +199,8 @@ def build_adapters(*,store,drive,reports,env,documents,reasoner=None,baseline=No
             if value is not None and key not in files:files[key]=archive('publication-'+key,value,task);store.put(task)
         if model and 'model_workbook' not in files:
             from financials.workbook import export_model
-            ref=drive.put_immutable(task['company_path']+'/03_财务模型/候选/'+model['model_version']+'.xlsx',export_model(model))
+            raw=export_model(model);workbook_revision=hashlib.sha256(raw).hexdigest()[:16]
+            ref=drive.put_immutable(task['company_path']+'/03_财务模型/候选/'+model['model_version']+'-'+workbook_revision+'.xlsx',raw)
             if ref.get('verified') is not True:raise ValueError('workbook read-back failed')
             files['model_workbook']=ref;store.put(task)
         attempted=task.get('publication_attempted',False);task['publication_attempted']=True;store.put(task)

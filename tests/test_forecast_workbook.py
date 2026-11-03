@@ -117,13 +117,18 @@ def test_editable_workbook_guards_forecasts_after_required_values_or_sources_are
     assert cached['Base']['C44'].value is None
 
 
-def test_every_statement_formula_matches_cache_across_distinct_cases_and_years():
+@pytest.mark.parametrize('standard',[False,True])
+def test_every_statement_formula_matches_cache_across_distinct_cases_and_years(standard):
     from openpyxl.utils.cell import range_boundaries,get_column_letter
-    s=scenarios()
+    b=baseline();s=scenarios()
+    if standard:
+        from tests.test_standard_baseline import api as mapper,financial_data,standard_scenarios,resolve_profile,profile
+        b=mapper().map_standard_baseline(financial_data(),resolve_profile(profile(),{}),as_of='2026-10-27')['baseline']
+        s=standard_scenarios()
     for name,growth in [('base',.1),('bull',.3),('bear',-.2)]:
         s[name][0]['values']['growth']=growth
         s[name].append(dict(deepcopy(s[name][0]),year=2027))
-    data=api().export_model(project(baseline(),s,as_of='2026-10-27'))
+    data=api().export_model(project(b,s,as_of='2026-10-27'))
     formulas=load_workbook(BytesIO(data));cached=load_workbook(BytesIO(data),data_only=True)
     memo={}
     def value(sheet,cell):
@@ -144,7 +149,7 @@ def test_every_statement_formula_matches_cache_across_distinct_cases_and_years()
             return repr(value(tab,match[2]))
         expression=re.sub(r'(?:(\w+)!)?([A-Z]+[0-9]+(?::[A-Z]+[0-9]+)?)',substitute,raw[1:])
         expression=re.sub(r'(?<![<>!])=(?!=)','==',expression).replace('TRUE','True').replace('FALSE','False')
-        result=eval(expression,{'__builtins__':{}},{'SUM':sum,'MAX':max,'MIN':min,'AND':lambda *v:all(v),'IF':lambda c,a,b:a if c else b,
+        result=eval(expression,{'__builtins__':{}},{'SUM':sum,'MAX':max,'MIN':min,'AND':lambda *v:all(v),'SIGN':lambda x:(x>0)-(x<0),'COLUMNS':lambda row:len(row),'IF':lambda c,a,b:a if c else b,
             'COUNTIF':lambda rows,v:sum(r==v for r in rows),'ISNUMBER':lambda v:isinstance(v,(int,float)) and not isinstance(v,bool),
             'LEN':len,'TRIM':lambda v:str(v or '').strip()})
         memo[key]=result;return result
@@ -155,6 +160,12 @@ def test_every_statement_formula_matches_cache_across_distinct_cases_and_years()
                     assert value(tab,cell.coordinate)==pytest.approx(cached[tab][cell.coordinate].value)
     assert cached['Bull']['D5'].value==pytest.approx(1690)
     assert cached['Bear']['D5'].value==pytest.approx(640)
+    if standard:
+        eq=next(row[3] for row in formulas['Assumptions'].iter_rows() if
+                tuple(c.value for c in row[:3])==('base',2026,'equity_issuance'))
+        eq.value=100;memo.clear()
+        assert value('Base','C44')=='' and value('Base','D44')==''
+        eq.value=0
     formulas['Assumptions']['D2']=None;memo.clear()
     for tab in ('Base','Bull','Bear'):assert value(tab,'C44')==''
     formulas['Assumptions']['D2']=.1;formulas['Assumptions']['E2']='   ';memo.clear()

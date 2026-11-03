@@ -128,6 +128,8 @@ def stage_prompt(stage,payload,task):
     if stage=='judgment':
         material['data_request_kinds']=sorted(REQUEST_KINDS)
         material['request_instruction']='data_requests[].kind必须逐字使用data_request_kinds中的英文值；不得用中文改写；没有请求则返回空数组。'
+    if stage=='report':
+        material['request_instruction']='报告阶段data_requests必须为空数组；未解决的请求只放open_questions及questions，勿声称已经完成。'
     if stage=='model':
         from research.existing_data import FIELDS
         material['historical_statement_fields']={kind:[field for field,_ in fields] for kind,fields in FIELDS.items()}
@@ -188,6 +190,25 @@ def validate_requests(items):
     return items
 
 
+def defer_writer_requests(draft):
+    """Keep late research requests visible without treating them as completed retrieval."""
+    from financials.forecast import digest
+    result=deepcopy(draft)
+    requests=validate_requests(result.get('data_requests'))
+    result['unexecuted_requests']=requests
+    if not requests:return result
+    questions=result.get('questions',[]);open_questions=result.get('open_questions')
+    if not isinstance(questions,list) or not isinstance(open_questions,list):
+        raise ValueError('explicit follow-up lists required')
+    for req in requests:
+        text='待补证：'+req['need']+'｜'+req['why']
+        if text not in open_questions:open_questions.append(text)
+        ident='writer-'+digest([req['kind'],req['need']])[:16]
+        if not any(q.get('id')==ident for q in questions):questions.append(dict(id=ident,need=req['need']))
+    result.update(questions=questions,data_requests=[],research_status='partial')
+    return result
+
+
 def validate_report(report,payload,task):
     if report.get('research_question')!=task['profile']['research_question']:raise ValueError('company core question changed')
     if report.get('research_status') not in {'complete','partial'}:raise ValueError('explicit research coverage required')
@@ -236,6 +257,6 @@ def validate_report(report,payload,task):
     if report.get('valuation_status') not in {'complete','pending'}:raise ValueError('valuation status required')
     if report['valuation_status']=='complete' and (not model or model.get('status')!='ready_for_review'):
         raise ValueError('computed candidate required for complete valuation')
-    if report['research_status']=='complete' and (not model or payload.get('coverage',{}).get('status')!='ready'):
+    if report['research_status']=='complete' and (not model or model.get('status')!='ready_for_review' or payload.get('coverage',{}).get('status')!='ready'):
         raise ValueError('partial model or coverage cannot claim complete research')
     return report

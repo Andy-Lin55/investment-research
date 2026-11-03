@@ -79,6 +79,8 @@ def render(task,result,files):
     model=result.get('model_snapshot')
     if model and model.get('scenarios'):
         blocks.append(block('heading_2','自有预测与情景估值'))
+        if r.get('valuation_status')=='pending':
+            blocks.append(block('quote','以下为研究假设下的情景敏感性。盈利与估值依据仍待核验，不作为正式目标价。'))
         mapping=result.get('baseline_mapping')
         if mapping:
             bridge=mapping['cash_bridge']

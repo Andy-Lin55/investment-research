@@ -83,12 +83,17 @@ def build_adapters(*,store,drive,reports,env,documents,reasoner=None,baseline=No
         docs=documents(task)
         if not docs:raise StageWait('waiting_source',['primary_documents_unavailable'])
         prior=prior_context(task) if prior_context else {'items':[],'gaps':[]}
+        data=financial_data(task) if financial_data else {}
+        if data.get('statements'):
+            from research.standard_model import map_standard_baseline
+            data['baseline_mapping']=map_standard_baseline(data,task['profile'],as_of=task.get('updated_at',task['created_at'])[:10])
+        context_version=digest([prior['items'],data.get('market_snapshot'),data.get('baseline_mapping',{}).get('baseline_digest')]) if data else digest(prior['items'])
         if task['trigger']['kind']=='weekly_screen':
             versions={d['document_id']:d['revision_id'] for d in docs}
             due=any(q.get('due') and q['due']<=task.get('updated_at',task['created_at'])[:10]
                     for q in task['previous_state'].get('open_questions',[]))
             if (versions==task['previous_state'].get('source_revisions') and not due
-                    and not prior['gaps'] and digest(prior['items'])==task['previous_state'].get('context_version',digest([]))):
+                    and not prior['gaps'] and context_version==task['previous_state'].get('context_version',digest([]))):
                 return dict(issuer_id=task['issuer_id'],status='no_change',scope='configured_official_sources_only')
             task['kind']='weekly_deep';store.put(task)
         checks=[]
@@ -96,12 +101,11 @@ def build_adapters(*,store,drive,reports,env,documents,reasoner=None,baseline=No
             if doc['issuer_id']!=task['issuer_id']:raise ValueError('document issuer differs')
             checks.append(build_coverage(doc['pages'],profile=task['profile'],document_type=doc['document_type'],
                 period_end=doc.get('period_end') or task['created_at'][:10],document_id=doc['document_id']))
-        data=financial_data(task) if financial_data else {}
         gaps=[doc['document_id']+':'+g for doc,check in zip(docs,checks) for g in check['gaps']]+data.get('gaps',[])
         if any(not check['input_complete'] for check in checks):
             raise StageWait('waiting_source',gaps)
         return dict(issuer_id=task['issuer_id'],status='partial' if gaps or prior['gaps'] else 'ready',documents=docs,coverage=checks,
-            gaps=gaps+prior['gaps'],prior_context=prior['items'],context_version=digest(prior['items']),financial_data=data)
+            gaps=gaps+prior['gaps'],prior_context=prior['items'],context_version=context_version,financial_data=data)
     def retrieve(payload,task):
         if retrieval:return retrieval(payload,task)
         p=task['profile'];inventory=p.get('broker_inventory',[])
@@ -109,6 +113,10 @@ def build_adapters(*,store,drive,reports,env,documents,reasoner=None,baseline=No
             'as_of':task['created_at'],'queries':[]},inventory,limits={'max_reports':p.get('max_broker_reports',5)}),{},store)
     def model(payload,task):
         raw=infer('model',payload,task);allowed=evidence_ids(payload)
+        if raw.get('driver_cases'):
+            if raw.get('assumptions'):raise StageWait('quality_blocked',['duplicate_driver_formats'])
+            from research.standard_model import expand_driver_cases
+            raw['assumptions']=expand_driver_cases(raw['driver_cases'])
         provider_docs=payload['coverage'].get('financial_data',{}).get('evidence_documents',[])
         all_fact_docs=[*payload['coverage']['documents'],*provider_docs,*payload.get('retrieval',{}).get('reports',[])]
         for fact in raw.get('facts',[]):
@@ -136,7 +144,8 @@ def build_adapters(*,store,drive,reports,env,documents,reasoner=None,baseline=No
                 raise StageWait('quality_blocked',['broker_estimate_identity_or_source_not_verified'])
         candidate=build_candidate_inputs(raw.get('facts',[]),raw.get('guidance',[]),raw.get('broker_estimates',[]),
             raw.get('assumptions',[]),prior_baseline=task['previous_state'].get('accepted_baseline'),
-            as_of=task.get('updated_at',task['created_at'])[:10],profile=task['profile'],admitted_source_refs=list(brokers))
+            as_of=task.get('updated_at',task['created_at'])[:10],profile=task['profile'],admitted_source_refs=list(brokers),
+            mapped_baseline=payload['coverage'].get('financial_data',{}).get('baseline_mapping'))
         if candidate.get('model') and candidate['model']['issuer_id']!=task['issuer_id']:
             raise StageWait('quality_blocked',['computed_model_issuer_mismatch'])
         candidate['candidate_status']=candidate['status'];candidate['status']='ready' if candidate.get('model') and candidate['model']['status']=='ready_for_review' else 'partial'
@@ -171,8 +180,9 @@ def build_adapters(*,store,drive,reports,env,documents,reasoner=None,baseline=No
             'url':doc.get('source',{}).get('url','https://www.notion.so/')},'revision_id':doc['revision_id']}
         task['presentation_version']=2
         analysis=dict(report=r,model_snapshot=model,actual_model=history[-1]['actual_model'],provider=history[-1]['provider'],
-            validation={'status':'ready_for_review' if model else 'pending_model'},
+            validation={'status':model['status'] if model else 'pending_model'},
             historical_tables=payload['model'].get('historical_tables',[]),
+            baseline_mapping=payload['model'].get('baseline_mapping'),
             financial_gaps=payload['coverage'].get('financial_data',{}).get('gaps',[]),
             market_snapshot=payload['coverage'].get('financial_data',{}).get('market_snapshot'),
             forecast_comparison=payload['model'].get('comparison',{}),

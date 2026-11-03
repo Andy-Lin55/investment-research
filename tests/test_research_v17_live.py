@@ -85,3 +85,20 @@ def test_env_file_can_enable_explicit_write_but_never_enables_writes_without_wri
     monkeypatch.setattr(api(),'run',lambda args,env:17)
     assert main(['scan','--write','--env-file',str(path)],env={})==17
     assert main(['scan','--env-file',str(path)],env={})==0
+
+
+def test_latest_guidance_survives_noise_in_inventory_and_prompt(monkeypatch):
+    from research.contract_v17 import compact_material
+    p=resolve_profile(profile(),{})
+    s=MemoryStore();src=api().OfficialSource(s,Drive())
+    items=[dict(document_id='forecast',document_type='业绩预告',published_at='2026-10-20',metadata_revision='g',
+                title='2026年度业绩预告',pages=[dict(page=1,text='公司预计本年利润变化')])]
+    items.extend(dict(document_id=f'noise-{day}',document_type='公告',published_at=f'2026-10-{day}',metadata_revision=str(day),
+                      pages=[]) for day in range(21,29))
+    monkeypatch.setattr(src,'metadata',lambda *a:items)
+    monkeypatch.setattr(src,'original',lambda p,r:(None,dict(r,revision_id=r['metadata_revision'])))
+    task=dict(task_id='test',profile=p,trigger={},created_at='2026-11-03')
+    docs=src.documents(task)
+    assert any(r['document_id']=='forecast' for r in docs)
+    material=compact_material({'coverage':{'documents':docs}},task)
+    assert next(r for r in material['coverage']['documents'] if r['document_id']=='forecast')['pages']==items[0]['pages']

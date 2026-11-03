@@ -144,7 +144,7 @@ def test_every_statement_formula_matches_cache_across_distinct_cases_and_years()
             return repr(value(tab,match[2]))
         expression=re.sub(r'(?:(\w+)!)?([A-Z]+[0-9]+(?::[A-Z]+[0-9]+)?)',substitute,raw[1:])
         expression=re.sub(r'(?<![<>!])=(?!=)','==',expression).replace('TRUE','True').replace('FALSE','False')
-        result=eval(expression,{'__builtins__':{}},{'SUM':sum,'MAX':max,'IF':lambda c,a,b:a if c else b,
+        result=eval(expression,{'__builtins__':{}},{'SUM':sum,'MAX':max,'MIN':min,'AND':lambda *v:all(v),'IF':lambda c,a,b:a if c else b,
             'COUNTIF':lambda rows,v:sum(r==v for r in rows),'ISNUMBER':lambda v:isinstance(v,(int,float)) and not isinstance(v,bool),
             'LEN':len,'TRIM':lambda v:str(v or '').strip()})
         memo[key]=result;return result

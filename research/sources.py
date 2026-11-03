@@ -48,6 +48,46 @@ def cninfo(ticker,start,end,request=public_json,*,company_name=None):
     return list({r['document_id']:r for r in rows}.values())
 
 
+def cninfo_exact(ticker,start,end,request=public_json):
+    """Use the official issuer directory to avoid a market-wide full-text scan."""
+    code,suffix=ticker.split('.')
+    lo,hi=date.fromisoformat(start),date.fromisoformat(end)
+    if hi<lo:raise ValueError('inverted CNINFO date range')
+    directory=request('GET','https://www.cninfo.com.cn/new/data/szse_stock.json')
+    stocks=directory.get('stockList')
+    if not isinstance(stocks,list):raise CoverageError('CNINFO issuer directory unavailable')
+    ids={r['orgId'] for r in stocks if r.get('code')==code and r.get('orgId')}
+    if len(ids)!=1:raise CoverageError('CNINFO issuer could not be resolved uniquely')
+    org=ids.pop();seen=set();out={};bj=timezone(timedelta(hours=8))
+    for page in range(1,101):
+        args=dict(pageNum=page,pageSize=30,tabName='fulltext',stock=code+','+org,seDate=start+'~'+end)
+        if suffix=='SZ':args['column']='szse'
+        data=request('POST','https://www.cninfo.com.cn/new/hisAnnouncement/query',data=args)
+        items=data.get('announcements');more=data.get('hasMore');total=data.get('totalAnnouncement')
+        if items is None and total==0 and more is False:items=[]
+        if not isinstance(items,list) or not isinstance(more,bool) or not isinstance(total,int):
+            raise CoverageError('CNINFO exact response does not prove page coverage')
+        if more and not items:raise CoverageError('CNINFO empty page before inventory end')
+        for item in items:
+            item_id=str(item.get('announcementId') or '')
+            identity=(str(item.get('secCode') or ''),item_id)
+            if not item_id or identity in seen:raise CoverageError('CNINFO missing identity or repeated item across pages')
+            seen.add(identity)
+            if identity[0]!=code:continue
+            if str(item.get('orgId') or '')!=str(org):
+                raise CoverageError('CNINFO issuer identity differs from directory')
+            stamp=datetime.fromtimestamp(item['announcementTime']/1000,bj)
+            if not lo<=stamp.date()<=hi:continue
+            path=item.get('adjunctUrl','')
+            if not path:raise CoverageError('CNINFO exact item lacks original locator')
+            out[item_id]=dict(document_id=item_id,title=re.sub('<[^>]+>','',item['announcementTitle']),
+                published_at=stamp.isoformat(),url='https://static.cninfo.com.cn/'+path)
+        if not more:
+            if len(seen)<total:raise CoverageError('CNINFO exact pagination is incomplete')
+            return list(out.values())
+    raise CoverageError('CNINFO exact pagination exceeded bound')
+
+
 def hkex(ticker,start,end,request=public_json):
     code=ticker.split('.')[0].zfill(5)
     entries=request('GET','https://www1.hkexnews.hk/ncms/script/eds/activestock_sehk_e.json')
@@ -97,6 +137,9 @@ def sec(ticker,start,end,request=public_json):
     return list({r['document_id']:r for r in out}.values())
 
 
+GUIDANCE_TYPES=frozenset({'业绩预告','业绩预告修正','业绩快报'})
+
+
 def document_type(title,form=None):
     if re.search(r'摘要|SUMMARY',title,re.I):
         if re.search(r'半年|中期|INTERIM',title,re.I):return '中期报告摘要'
@@ -106,10 +149,11 @@ def document_type(title,form=None):
     if re.search(r'业绩预告修正|業績預告修正',title):return '业绩预告修正'
     if re.search(r'业绩预告|業績預告|PROFIT WARNING',title,re.I):return '业绩预告'
     if re.search(r'业绩快报|業績快報',title):return '业绩快报'
-    if re.search(r'半年|中期報告|中期报告|INTERIM REPORT',title,re.I):return '中期报告'
-    if re.search(r'年[度報报]|ANNUAL REPORT',title,re.I):return '年度报告'
-    if re.search(r'季度|QUARTER',title,re.I):return '季度报告'
-    if re.search(r'半年|中期報告|中期报告|INTERIM REPORT',title,re.I):return '中期报告'
+    if re.search(r'投资者关系活动记录|投資者關係活動記錄|业绩说明会|業績說明會|EARNINGS CALL',title,re.I):return '业绩会材料'
+    if re.search(r'利润分配|利潤分配|派息|DIVIDEND',title,re.I):return '重大公告'
+    if re.search(r'半年度报告|半年度報告|中期報告|中期报告|INTERIM REPORT',title,re.I):return '中期报告'
+    if re.search(r'年度报告|年度報告|年报|年報|ANNUAL REPORT',title,re.I):return '年度报告'
+    if re.search(r'季度报告|季度報告|季报|季報|QUARTERLY REPORT',title,re.I):return '季度报告'
     if re.search(r'业绩|業績|RESULTS|EARNINGS',title,re.I):return '业绩公告'
     if form in {'8-K','6-K','40-F','40-F/A','8-K/A','6-K/A'} or re.search(
             r'收购|收購|并购|合并|融资|融資|配售|诉讼|訴訟|监管|監管|股东大会|股東大會|回购|回購|减持|增持|重大|'

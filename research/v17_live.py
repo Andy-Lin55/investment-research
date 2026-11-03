@@ -104,10 +104,16 @@ def period_end(title,kind,profile):
     return None
 
 
+
+def history_start(day):
+    end=date.fromisoformat(day)
+    return end.replace(year=end.year-5,day=min(end.day,28)).isoformat()
+
+
 class OfficialSource:
     def __init__(self,store,drive,*,collectors=None,downloader=None):
         self.store=store;self.drive=drive
-        self.collectors=collectors or {'CN':sources.cninfo,'HK':sources.hkex,'US':sources.sec}
+        self.collectors=collectors or {'CN':sources.cninfo_exact,'HK':sources.hkex,'US':sources.sec}
         self.downloader=downloader or sources.download_primary
 
     def metadata(self,profile,start,end):
@@ -171,14 +177,15 @@ class OfficialSource:
 
     def documents(self,task):
         p=task['profile'];now=task.get('updated_at',task['created_at'])[:10]
-        end=date.fromisoformat(now);start=end.replace(year=end.year-5,day=min(end.day,28)).isoformat()
-        metadata=self.metadata(p,start,now)
+        metadata=self.metadata(p,history_start(now),now)
         task['source_snapshot']={r['document_id']:r['metadata_revision'] for r in metadata}
         picked=[]
         groups=[lambda r:r['document_type'] in {'年度报告','10-K','20-F','10-K/A','20-F/A'},
                 lambda r:r['document_type'] in FULL and r['document_type'] not in {'年度报告','10-K','20-F','10-K/A','20-F/A'},
-                lambda r:r['document_type'] not in FULL]
-        for selector,limit in zip(groups,(5,8,3)):
+                lambda r:r['document_type'] in sources.GUIDANCE_TYPES,
+                lambda r:r['document_type']=='业绩会材料',
+                lambda r:r['document_type'] not in FULL|sources.GUIDANCE_TYPES|{'业绩会材料'}]
+        for selector,limit in zip(groups,(5,8,2,1,3)):
             picked.extend(sorted(filter(selector,metadata),key=lambda r:r['published_at'],reverse=True)[:limit])
         docs={}
         for ref in task['trigger'].get('documents',[]):
@@ -192,8 +199,7 @@ class OfficialSource:
     def prepublish(self,payload,task):
         now=task.get('updated_at',task['created_at'])[:10]
         try:
-            start=(date.fromisoformat(now)-timedelta(days=365*5+2)).isoformat()
-            latest=self.metadata(task['profile'],start,now)
+            latest=self.metadata(task['profile'],history_start(now),now)
             before=task.get('source_snapshot',{})
             if any(before.get(r['document_id'])!=r['metadata_revision'] for r in latest):
                 raise InputsChanged('new_or_revised_official_disclosure')

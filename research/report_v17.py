@@ -2,9 +2,46 @@
 from research.report_view import block,table,value,rich
 
 
+def standard_forecast_tables(rows,model,price):
+    scale=1e8 if model['baseline']['revenue']>=1e8 else 1
+    unit=('亿元' if scale==1e8 else '原币')+' '+model['currency']
+    def cells(items):
+        return table(['指标／单位',*[str(y['year'])+'F' for y in rows]],[[label,*[value(fn(y)/s if s is not None else fn(y)) if fn(y) is not None else '—' for y in rows]] for label,fn,s in items])
+    result=[]
+    groups=[('预测利润表',[
+        ('收入',lambda y:y['income']['revenue'],scale),('营业成本（含折旧）',lambda y:y['income']['cogs'],scale),
+        ('经营费用（含折旧）',lambda y:y['income']['opex'],scale),('净财务费用代理',lambda y:y['income']['interest'],scale),
+        ('其他税前净损益',lambda y:y['income']['other_pretax_income'],scale),('税前利润',lambda y:y['income']['pretax'],scale),
+        ('所得税',lambda y:y['income']['tax'],scale),('净利润',lambda y:y['income']['net_income'],scale),
+        ('归母净利',lambda y:y['income']['parent_net_income'],scale),('基本EPS / '+model['currency']+'/股',lambda y:y['income']['eps'],1)]),
+        ('预测资产负债表',[
+        ('现金等价物',lambda y:y['balance']['cash'],scale),('应收账款',lambda y:y['balance']['receivables'],scale),
+        ('存货',lambda y:y['balance']['inventory'],scale),('固定资产',lambda y:y['balance']['ppe'],scale),
+        ('其他资产',lambda y:y['balance']['other_assets'],scale),('总资产',lambda y:sum(y['balance'][k] for k in ('cash','receivables','inventory','ppe','other_assets')),scale),
+        ('应付账款',lambda y:y['balance']['payables'],scale),('所定义债务',lambda y:y['balance']['debt'],scale),
+        ('其他负债',lambda y:y['balance']['other_liabilities'],scale),('含少数权益',lambda y:y['balance']['equity'],scale),
+        ('资产负债差额 / 原币',lambda y:y['checks']['balance_difference'],1)]),
+        ('预测现金流量表',[
+        ('经营现金流',lambda y:y['cashflow']['operating'],scale),('投资现金流',lambda y:y['cashflow']['investing'],scale),
+        ('融资现金流',lambda y:y['cashflow']['financing'],scale),('汇率影响',lambda y:y['cashflow']['fx'],scale),
+        ('现金变动',lambda y:y['cashflow']['change'],scale),('期末现金等价物',lambda y:y['balance']['cash'],scale),
+        ('资本开支',lambda y:y['cashflow']['capex'],scale),('股息假设',lambda y:y['cashflow']['dividends'],scale),
+        ('资金缺口',lambda y:y['funding_shortfall'],scale)])]
+    for title,items in groups:result.extend([block('paragraph',title+'｜'+unit),cells(items)])
+    def approved_price(row):
+        return row['valuation']['price'] if row['status']=='ready_for_review' else None
+    labels={'ready_for_review':'待人工复核','funding_required':'有资金缺口','unbalanced':'三表未勾稽',
+            'invalid_asset_balance':'资产余额异常','prior_year_unresolved':'前期缺口待解决','loss_valuation_pending':'亏损，PE估值不适用'}
+    items=[('校验状态',lambda y:labels.get(y['status'],y['status']),None),('PE / 倍',lambda y:y['valuation']['multiple'],1),('每股情景估值 / '+model['currency'],approved_price,1)]
+    if price and price.get('currency')==model['currency'] and price.get('price',0)>0:
+        items.append(('相对所列收盘价空间 / %（非年化，不含股息）',lambda y:(approved_price(y)/price['price']-1)*100 if approved_price(y) is not None else None,1))
+    result.append(cells(items));return result
+
+
 def render(task,result,files):
     r=result['report'];blocks=[block('heading_1',task['ticker']+'｜AI研究更新'),
         block('quote',r['conclusion']),block('paragraph','核心问题：'+r['research_question']),
+        block('paragraph','持有判断：'+r['thesis']),
         block('paragraph','研究覆盖：'+r['research_status']+'；AI研究候选／未人工采纳。正式模型和人工持有逻辑不自动改写。'),
         block('heading_2','持有逻辑与变化')]
     blocks.append(table(['逻辑','变化与依据','证伪条件'],[[x['claim'],x['change']+'：'+x['reason'],x['falsifier']] for x in r['holding_logic']]))
@@ -42,9 +79,17 @@ def render(task,result,files):
     model=result.get('model_snapshot')
     if model and model.get('scenarios'):
         blocks.append(block('heading_2','自有预测与情景估值'))
+        mapping=result.get('baseline_mapping')
+        if mapping:
+            bridge=mapping['cash_bridge']
+            blocks.append(block('paragraph','预测基期：'+model['baseline']['period_end']+'；现金口径为现金等价物 '+value(bridge.get('cash_equivalents'))+
+                '，货币资金 '+value(bridge.get('monetary_funds'))+'；差额 '+value(bridge.get('monetary_funds_less_cash_equivalents'))+' 保留在其他资产。'))
+            for note in mapping.get('limitations',[]):blocks.append(block('paragraph',note))
         for case in ('base','bull','bear'):
             rows=model['scenarios'][case]
             blocks.append(block('heading_3',case+'｜'+model['currency']+' 原币；研究假设 F'))
+            if model['baseline'].get('standard_model_version')==1:
+                blocks.extend(standard_forecast_tables(rows,model,price));continue
             metrics=[('收入',lambda y:y['income']['revenue']),('归母净利',lambda y:y['income']['parent_net_income']),
                 ('EPS',lambda y:y['income']['eps']),('经营现金流',lambda y:y['cashflow']['operating']),
                 ('期末现金',lambda y:y['balance']['cash']),('债务',lambda y:y['balance']['debt']),

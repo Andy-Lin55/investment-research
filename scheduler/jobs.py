@@ -107,7 +107,7 @@ def job_fetch_and_parse() -> None:
     _run_local_collector(_job_fetch_and_parse, "公告抓取")
 
 
-def _job_fetch_and_parse() -> None:
+def _job_fetch_and_parse(*, trigger_research: bool = True) -> None:
     logger.info("═" * 50)
     logger.info("📡 开始每日公告抓取任务")
     company_names: dict[str, str] = {}
@@ -181,7 +181,7 @@ def _job_fetch_and_parse() -> None:
                     if signal and signal != "中性":
                         update_company_signal(ticker, signal)
                     # High importance 事件自动触发 Research Pipeline（非阻塞）
-                    if parsed.get("importance") == "High" and page_id:
+                    if trigger_research and parsed.get("importance") == "High":
                         _trigger_research_async(ticker, page_id)
             except Exception as e:
                 processing_errors.append(f"{ticker}:{type(e).__name__}")
@@ -360,7 +360,7 @@ def job_daily_briefing() -> None:
         _job_daily_briefing()
 
 
-def _job_daily_briefing() -> None:
+def _job_daily_briefing(*, preview_only: bool = False) -> None:
     logger.info("═" * 50)
     logger.info("📋 开始生成每日简报")
     from notion_sync.notion_client_wrapper import get_client
@@ -381,6 +381,8 @@ def _job_daily_briefing() -> None:
         )
     except Exception as e:
         logger.error(f"简报查询 Notion 失败: {e}")
+        if preview_only:
+            raise
         return
 
     if not events:
@@ -405,6 +407,10 @@ def _job_daily_briefing() -> None:
         logger.warning("AI 生成简报失败，降级为原始事件列表")
     briefing_body = material.render(analysis)
     logger.info(f"每日简报正文长度：{len(briefing_body)} 字")
+
+    if preview_only:
+        logger.info("简报预览已生成，正文长度已核验")
+        return
 
     # 3. 发送简报：Feishu → SMTP → Apple Mail（按优先级）
     subject = f"📊 投研日报 {today}（{len(events)} 条事件）"

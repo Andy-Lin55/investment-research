@@ -347,3 +347,23 @@ def test_url_lookup_failure_does_not_fall_back_or_allow_an_event_write(monkeypat
         sync_manager.create_event(TICKER, {"source_url": filing()["url"]})
     client.databases.query.assert_called_once()
     client.pages.create.assert_not_called()
+
+
+def test_briefing_preview_generates_body_without_calling_delivery(monkeypatch):
+    from data_ingestion import ai_client, disclosure_analysis
+    from notion_sync import notion_client_wrapper
+    from scheduler import briefing
+
+    monkeypatch.setattr(notion_client_wrapper, "get_client", Mock())
+    monkeypatch.setattr(briefing, "fetch_briefing_events", Mock(return_value=[{}]))
+    monkeypatch.setattr(disclosure_analysis, "is_primary_disclosure", Mock(return_value=False))
+    monkeypatch.setattr(ai_client, "call_ai", Mock(return_value="overview"))
+    render = Mock(return_value="briefing body")
+    monkeypatch.setattr(briefing, "build_daily_briefing", Mock(return_value=SimpleNamespace(prompt="test", render=render)))
+    send = Mock()
+    monkeypatch.setattr(jobs, "_send_briefing", send)
+
+    jobs._job_daily_briefing(preview_only=True)
+
+    render.assert_called_once_with("overview")
+    send.assert_not_called()

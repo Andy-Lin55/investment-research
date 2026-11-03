@@ -14,7 +14,10 @@ def test_neeq_numeric_ticker_is_not_silently_routed_to_sec(monkeypatch):
         fetcher = Mock(return_value=[])
         monkeypatch.setattr(filings_router, name, fetcher)
         fetchers.append(fetcher)
-    assert filings_router.fetch_filings("830806.NQ") == []
+    nee_fetcher = Mock(return_value=[{"ticker": "830806.NQ"}])
+    monkeypatch.setattr(filings_router, "fetch_neeq_filings", nee_fetcher)
+    assert filings_router.fetch_filings("830806.NQ") == [{"ticker": "830806.NQ"}]
+    nee_fetcher.assert_called_once()
     for fetcher in fetchers:
         fetcher.assert_not_called()
 

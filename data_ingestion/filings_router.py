@@ -8,6 +8,7 @@ from loguru import logger
 from data_ingestion.disclosure_health import SourceHealth
 
 from data_ingestion.cninfo_fetcher import fetch_periodic_reports
+from data_ingestion.neeq_fetcher import fetch_neeq_filings
 from data_ingestion.hkex_fetcher import (
     fetch_hk_annual_report,
     fetch_hk_filings,
@@ -62,11 +63,8 @@ def fetch_filings(
     results: list[dict] = []
 
     if market == "NEEQ":
-        status = health if health is not None else SourceHealth("NEEQ", ticker)
-        status.blocked_reason = "neeq_adapter_unavailable"
-        logger.warning(f"[{ticker}] NEEQ disclosure adapter unavailable")
-        status.finish(0, strict)
-        return []
+        return fetch_neeq_filings(ticker, since_date=since_date, until_date=until_date, max_items=max_items,
+                                  doc_type=doc_type, health=health, strict=strict)
 
     if (health is not None or strict or since_date is not None) and market in {"HK", "US"}:
         status = health if health is not None else SourceHealth(market, ticker)

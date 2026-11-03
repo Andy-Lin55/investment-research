@@ -275,20 +275,21 @@ def run(args) -> int:
             except Exception as error:
                 snapshot["source_errors"].append({"source": "CNINFO", "ticker": company["ticker"], "error_type": type(error).__name__})
     from data_ingestion.hkex_fetcher import fetch_hk_filings
+    from data_ingestion.neeq_fetcher import fetch_neeq_filings
     from data_ingestion import sec_fetcher
     for company in {r["ticker"]: r for r in roster if r["market"] in {"HK", "US", "NEEQ"}}.values():
         ticker = company["ticker"]
         health = SourceHealth({"HK": "HKEX", "US": "SEC", "NEEQ": "NEEQ"}[company["market"]], ticker)
         items = []
-        if company["market"] == "NEEQ":
-            health.blocked_reason = "neeq_adapter_unavailable"
-        elif company["market"] == "US" and not values.get("SEC_USER_AGENT"):
+        if company["market"] == "US" and not values.get("SEC_USER_AGENT"):
             health.blocked_reason = "sec_user_agent_missing_or_invalid"
         else:
             try:
                 if company["market"] == "HK":
                     items = fetch_hk_filings(ticker, doc_type="all", max_items=100, since_date=start.isoformat(),
                                             until_date=as_of.isoformat(), health=health)
+                elif company["market"] == "NEEQ":
+                    items = fetch_neeq_filings(ticker, since_date=start.isoformat(), until_date=as_of.isoformat(), health=health)
                 else:
                     # Use a supplied real contact only; never manufacture an SEC identity.
                     sec_fetcher._HEADERS = {**sec_fetcher._HEADERS, "User-Agent": values["SEC_USER_AGENT"]}

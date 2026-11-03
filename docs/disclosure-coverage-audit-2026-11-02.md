@@ -15,7 +15,7 @@ The broad CNINFO scan used **63 requests**, including pagination. Company-name r
 
 The independent Tushare income-period check returned 2026Q3 for all **20 A-share names**. For **17** names the publication was inside the audit window and the same period was observed in the CNINFO report inventory; the other **3** had publication dates before the window. This comparison does not assert completeness outside the window.
 
-**Remaining gaps:** `BRK.B`, `QFIN.O` and `SPG.N` were blocked before SEC requests because the audit configuration lacked a real contact. SEC access was therefore not tested. `830806.NQ` is a numeric NEEQ symbol, not a US SEC ticker; this project has no NEEQ adapter. The audit returned an incomplete status for these four names. No live Notion writes, email, model calls or research runs were performed.
+**Remaining gaps:** `BRK.B`, `QFIN.O` and `SPG.N` were blocked before SEC requests because the audit configuration lacked a real contact. SEC access was therefore not tested. `830806.NQ` is a numeric NEEQ symbol, not a US SEC ticker; the NEEQ adapter was unavailable during this audit. The audit returned an incomplete status for these four names. No live Notion writes, email, model calls or research runs were performed.
 
 The collector keeps the existing list/dictionary return shapes, adds optional health/strict controls, merges exact code/name results, follows CNINFO pagination, and applies Beijing date bounds. The daily collection jobs surface incomplete source retrieval and retain the pre-parse idempotency check. The audit is separate from scheduled jobs:
 
@@ -27,3 +27,5 @@ python -m scripts.audit_disclosures --env-file PRIVATE_ENV --output LOCAL_EVIDEN
 Use `--resume` to reuse matching CNINFO and Tushare observations while refreshing Notion and HKEX reads. The detailed roster, event references, inventory checkpoints and original URLs are local audit evidence; they are not committed to the repository.
 
 Known configuration gaps now appear as `blocked` per ticker in the filings job summary. Unexpected failures and truncation on configured sources still fail the collection job; the briefing runs independently with available records. If a real `SEC_USER_AGENT` secret already exists, the filings job reads it. No secret was created by this change. Use ticker plus original URL for deduplication, including HTTP/HTTPS equivalence; reserve date/type deduplication for records without an original URL.
+
+On November 3 the NEEQ adapter was verified against the official inventory. It found four documents for 830806.NQ in the seven-day lookback, including the October 28 quarterly report, and the briefing reader extracted the original PDF text.

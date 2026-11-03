@@ -114,6 +114,7 @@ jobs:
     # 即使某个数据 job 失败，仍发送简报（用已写入的数据）
     if: always()
     env:
+      SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
       FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}
       SMTP_HOST: ${{ secrets.SMTP_HOST }}
       SMTP_PORT: ${{ secrets.SMTP_PORT }}

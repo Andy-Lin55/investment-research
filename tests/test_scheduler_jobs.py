@@ -277,12 +277,12 @@ def test_failed_parser_cannot_finish_daily_job_green(daily):
 
 
 @pytest.mark.parametrize("failure", [None, "request", "truncation"])
-def test_hk_us_coverage_distinguishes_blocks_and_source_failures(daily, monkeypatch, tmp_path, failure):
+def test_filings_coverage_distinguishes_blocks_and_source_failures(daily, monkeypatch, tmp_path, failure):
     import requests
     from data_ingestion import filings_router, sec_fetcher
     from data_ingestion.disclosure_health import SourceFetchError
 
-    monkeypatch.setattr(jobs, "get_daily_tickers", lambda **kwargs: ["830806.NQ", "QFIN.O", "0700.HK"])
+    monkeypatch.setattr(jobs, "get_daily_tickers", lambda **kwargs: ["QFIN.O", "0700.HK"])
     monkeypatch.setattr(sec_fetcher, "SEC_USER_AGENT", "Test Ops ops@example.com" if failure == "request" else "")
     monkeypatch.setattr(sec_fetcher, "get_cik", Mock(return_value="0000000123"))
     monkeypatch.setattr(sec_fetcher, "REQUEST_INTERVAL_SECONDS", 0)
@@ -304,7 +304,6 @@ def test_hk_us_coverage_distinguishes_blocks_and_source_failures(daily, monkeypa
     else:
         jobs._job_fetch_filings()
     output = summary.read_text()
-    assert "| 830806.NQ | blocked | neeq_adapter_unavailable |" in output
     if failure == "request":
         assert "| QFIN.O | error | submissions (Timeout) |" in output
         network.assert_called_once()

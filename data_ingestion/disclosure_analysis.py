@@ -13,7 +13,7 @@ PRIMARY_TYPES = frozenset({
     "年度报告", "中期报告", "季度报告", "业绩会材料", "新闻稿",
     "10-K", "10-Q", "20-F", "6-K", "8-K", "DEF 14A", "DEFA14A",
 })
-REGULATOR_DOMAINS = ("cninfo.com.cn", "hkexnews.hk", "sec.gov", "sse.com.cn", "szse.cn")
+REGULATOR_DOMAINS = ("cninfo.com.cn", "hkexnews.hk", "sec.gov", "sse.com.cn", "szse.cn", "neeq.com.cn")
 CHUNK_CHARS = 24000
 
 
@@ -66,6 +66,9 @@ def _read_document(url: str) -> tuple[str, list[str]]:
     if parsed_url.scheme not in {"http", "https"} or not parsed_url.hostname:
         raise ValueError("缺少有效的原文网址")
     headers = {"User-Agent": SEC_USER_AGENT if parsed_url.hostname.endswith("sec.gov") else "Mozilla/5.0"}
+    if parsed_url.hostname == "www.neeq.com.cn":
+        headers.update({"Referer": "https://www.neeq.com.cn/disclosure/announcement.html",
+                        "Accept": "application/pdf,*/*"})
     response = requests.get(url, headers=headers, timeout=30)
     response.raise_for_status()
     content = response.content
@@ -79,6 +82,8 @@ def _read_document(url: str) -> tuple[str, list[str]]:
         text = "\n\n".join(f"[第 {i + 1} 页]\n{page}" for i, page in enumerate(pages))
         return text.strip(), []
 
+    if parsed_url.hostname == "www.neeq.com.cn" and parsed_url.path.lower().endswith(".pdf"):
+        raise ValueError("股转原文响应不是 PDF")
     soup = BeautifulSoup(content, "html.parser")
     # Earnings releases often live in an EX-99 attachment rather than the 8-K cover.
     exhibits = []

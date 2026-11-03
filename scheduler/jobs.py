@@ -5,8 +5,10 @@ scheduler/jobs.py
 from __future__ import annotations
 
 import contextlib
+import os
 import subprocess
 import sys
+from collections import Counter
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -92,10 +94,17 @@ def _trigger_research_async(ticker: str, trigger_event_id: str) -> None:
 
 # ── 每日 07:30 — 拉取昨日公告 ────────────────────────────────
 
+def _run_local_collector(job, label: str) -> None:
+    try:
+        with _no_sleep(label):
+            job()
+    except Exception as error:
+        logger.error(f"本地采集任务失败 [{label}]: {error}")
+
+
 def job_fetch_and_parse() -> None:
     """拉取所有 Active 股票的最新公告，解析后写入 Notion Events DB"""
-    with _no_sleep("公告抓取"):
-        _job_fetch_and_parse()
+    _run_local_collector(_job_fetch_and_parse, "公告抓取")
 
 
 def _job_fetch_and_parse() -> None:
@@ -189,8 +198,28 @@ def _job_fetch_and_parse() -> None:
 
 def job_fetch_filings() -> None:
     """拉取 HK/US Active 股票的最新公告/报告（元数据写入 Events DB，不做 AI 解析）"""
-    with _no_sleep("HK/US文件抓取"):
-        _job_fetch_filings()
+    _run_local_collector(_job_fetch_filings, "HK/US文件抓取")
+
+
+def _report_filings_coverage(statuses: list[SourceHealth]) -> None:
+    counts = Counter(status.status for status in statuses)
+    states = ("complete", "blocked", "limited", "partial", "error", "not_started")
+    totals = " | ".join(f"{state}: {counts[state]}" for state in states)
+    lines = ["## HK/US filing coverage", "", totals, "", "| Ticker | Status | Reason |", "|---|---|---|"]
+    for status in statuses:
+        if status.status == "complete":
+            continue
+        reasons = [status.blocked_reason] if status.blocked_reason else []
+        reasons.extend(f"{error['operation']} ({error['error_type']})" for error in status.errors)
+        reasons.extend(status.limitations)
+        ticker = status.ticker.replace("|", "&#124;").replace("\n", " ").replace("\r", " ")
+        reason = ", ".join(reasons).replace("|", "&#124;").replace("\n", " ").replace("\r", " ")
+        lines.append(f"| {ticker} | {status.status} | {reason} |")
+        logger.warning(f"Filing coverage [{ticker}] {status.status}: {reason}")
+    summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary_path:
+        with Path(summary_path).open("a", encoding="utf-8") as summary:
+            summary.write("\n".join(lines) + "\n\n")
 
 
 def _job_fetch_filings() -> None:
@@ -244,9 +273,11 @@ def _job_fetch_filings() -> None:
             logger.error(f"HK/US 文件抓取失败 [{ticker}]: {e}")
 
     logger.info(f"📊 HK/US 文件抓取完成，写入 Notion {written} 条")
-    if any(s.errors or s.limitations for s in statuses):
+    _report_filings_coverage(statuses)
+    failed = [status for status in statuses if status.status not in {"complete", "blocked"}]
+    if failed:
         raise SourceFetchError("HK/US disclosure collection incomplete: " + ", ".join(
-            f"{s.ticker}:{s.status}" for s in statuses if s.errors or s.limitations))
+            f"{s.ticker}:{s.status}" for s in failed))
 
 
 # ── 每日 08:00 — 当日监控简报 ───────────────────────────────

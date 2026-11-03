@@ -61,6 +61,8 @@ jobs:
     name: HK/US Filings (HKEX + SEC)
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
     steps:
       - uses: actions/checkout@v4.1.7
       - uses: actions/setup-python@v5.0.0

@@ -52,7 +52,9 @@ def test_sec_placeholder_contact_does_not_claim_empty_inventory(monkeypatch):
     with pytest.raises(SourceFetchError):
         sec.fetch_sec_filings("QFIN.O", ["20-F", "6-K"], health=health, strict=True)
     network.assert_not_called()
-    assert health.errors[0]["operation"] == "contact_configuration"
+    assert health.status == "blocked"
+    assert health.blocked_reason == "sec_user_agent_missing_or_invalid"
+    assert not health.errors
 
 
 def test_daily_roster_failure_can_be_explicit_instead_of_no_active_stocks(monkeypatch):

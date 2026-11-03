@@ -25,3 +25,5 @@ python -m scripts.audit_disclosures --env-file PRIVATE_ENV --output LOCAL_EVIDEN
 ```
 
 Use `--resume` to reuse matching CNINFO and Tushare observations while refreshing Notion and HKEX reads. The detailed roster, event references, inventory checkpoints and original URLs are local audit evidence; they are not committed to the repository.
+
+Known configuration gaps now appear as `blocked` per ticker in the filings job summary. Unexpected failures and truncation on configured sources still fail the collection job; the briefing runs independently with available records. If a real `SEC_USER_AGENT` secret already exists, the filings job reads it. No secret was created by this change. Use ticker plus original URL for deduplication, including HTTP/HTTPS equivalence; reserve date/type deduplication for records without an original URL.

@@ -169,7 +169,9 @@ def write_summary(output: Path, snapshot: dict) -> None:
     lines += ["", "Source issues and limits:"]
     for r in inventories:
         if r["health"]["status"] != "complete":
-            lines.append(f"- {r['company']['ticker']}: {r['health']['status']}; errors={r['health']['errors']}; limits={r['health']['limitations']}")
+            health = r["health"]
+            detail = health.get("blocked_reason") or f"errors={health['errors']}, limits={health['limitations']}"
+            lines.append(f"- {r['company']['ticker']} ({health['status']}) — {detail}")
     lines += ["- " + s for s in snapshot["limitations"]]
     lines += ["", "Independent Tushare income-period checks:", "", "| Ticker | Latest period | Publication | Inventory check |", "|---|---|---|---|"]
     for check in snapshot["financial_period_checks"]:
@@ -279,11 +281,9 @@ def run(args) -> int:
         health = SourceHealth({"HK": "HKEX", "US": "SEC", "NEEQ": "NEEQ"}[company["market"]], ticker)
         items = []
         if company["market"] == "NEEQ":
-            health.fail("adapter_unavailable", NotImplementedError("NEEQ adapter unavailable"))
-            health.limitations.append("Numeric .NQ is not a US ticker; declared A-share row requires a NEEQ adapter")
+            health.blocked_reason = "neeq_adapter_unavailable"
         elif company["market"] == "US" and not values.get("SEC_USER_AGENT"):
-            health.fail("contact_configuration", ValueError("SEC contact not configured"))
-            health.limitations.append("SEC contact missing; live SEC access not tested; no coverage claim")
+            health.blocked_reason = "sec_user_agent_missing_or_invalid"
         else:
             try:
                 if company["market"] == "HK":

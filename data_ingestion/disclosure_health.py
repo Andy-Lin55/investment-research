@@ -26,6 +26,7 @@ class SourceHealth:
     item_count: int = 0
     successful_requests: int = 0
     finished: bool = False
+    blocked_reason: str | None = None
 
     @property
     def status(self) -> str:
@@ -33,6 +34,8 @@ class SourceHealth:
             return "partial" if self.item_count or self.successful_requests else "error"
         if self.limitations:
             return "limited"
+        if self.blocked_reason:
+            return "blocked"
         return "complete" if self.finished else "not_started"
 
     def fail(self, operation: str, error: Exception) -> None:

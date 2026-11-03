@@ -175,7 +175,7 @@ def fetch_sec_filings(
     """
     health = health if health is not None else SourceHealth("SEC", ticker)
     if not SEC_USER_AGENT or "research@invest.com" in SEC_USER_AGENT or "@" not in SEC_USER_AGENT:
-        health.fail("contact_configuration", ValueError("Real SEC contact required"))
+        health.blocked_reason = "sec_user_agent_missing_or_invalid"
         health.finish(0, strict)
         return []
     cik = get_cik(ticker)

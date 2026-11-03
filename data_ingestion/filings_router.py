@@ -63,8 +63,8 @@ def fetch_filings(
 
     if market == "NEEQ":
         status = health if health is not None else SourceHealth("NEEQ", ticker)
-        status.fail("adapter_unavailable", NotImplementedError("No NEEQ disclosure adapter"))
-        logger.error(f"[{ticker}] NEEQ disclosure adapter unavailable; not a US SEC ticker")
+        status.blocked_reason = "neeq_adapter_unavailable"
+        logger.warning(f"[{ticker}] NEEQ disclosure adapter unavailable")
         status.finish(0, strict)
         return []
 

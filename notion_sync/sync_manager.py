@@ -12,6 +12,7 @@ from typing import Optional
 
 import requests
 from loguru import logger
+from data_ingestion.disclosure_health import SourceFetchError
 from notion_client import APIResponseError
 
 from config.settings import (
@@ -147,7 +148,7 @@ def get_active_tickers() -> list[str]:
     return tickers
 
 
-def get_daily_tickers(*, company_names: dict[str, str] | None = None) -> list[str]:
+def get_daily_tickers(*, company_names: dict[str, str] | None = None, strict: bool = False) -> list[str]:
     """获取 Active/Watch 股票；可选输出 company_names 复用同一批 Universe 记录的 Name。"""
     client = get_client()
     tickers = []
@@ -167,6 +168,8 @@ def get_daily_tickers(*, company_names: dict[str, str] | None = None) -> list[st
             if cursor:
                 kwargs["start_cursor"] = cursor
             res = notion_request_with_retry(client.databases.query, **kwargs)
+            if not isinstance(res.get("results"), list):
+                raise ValueError("Notion roster results missing")
             for page in res.get("results", []):
                 props = page.get("properties", {})
                 ticker_prop = props.get("Ticker", {}).get("rich_text", [])
@@ -185,6 +188,8 @@ def get_daily_tickers(*, company_names: dict[str, str] | None = None) -> list[st
         logger.info(f"获取到 {len(tickers)} 只股票（Active + Watch）")
     except Exception as e:
         logger.error(f"获取每日 tickers 失败: {e}")
+        if strict:
+            raise SourceFetchError("Notion daily roster read incomplete") from e
     return tickers
 
 

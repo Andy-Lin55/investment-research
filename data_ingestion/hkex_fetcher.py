@@ -6,6 +6,7 @@ data_ingestion/hkex_fetcher.py
 from __future__ import annotations
 
 import json
+import re
 import time
 from datetime import date
 from pathlib import Path
@@ -13,6 +14,7 @@ from typing import Optional
 
 import requests
 from loguru import logger
+from data_ingestion.disclosure_health import SourceHealth, beijing_date
 
 from config.settings import TMP_ANNOUNCEMENTS, REQUEST_INTERVAL_SECONDS
 
@@ -37,7 +39,7 @@ _DOC_TYPE_T2_MAP: dict[str, list[int]] = {
     "interim":   [40200, 13400],
     "quarterly": [40300],
     "earnings":  [13300, 13400],
-    "all":       [40100, 40200, 13300, 13400],
+    "all":       [-2],  # All categories: quarterly/overseas regulatory reports are not confined to four codes.
 }
 
 _HEADERS = {
@@ -103,12 +105,29 @@ def _download_pdf(pdf_url: str, save_path: Path) -> bool:
         return False
 
 
+def _classify_title(title: str) -> str:
+    title = title.upper()
+    if ("QUARTER" in title and any(k in title for k in ["REPORT", "RESULT", "FINANCIAL"])) or any(
+        k in title for k in ["季度报告", "季度報告", "季報", "季度業績", "季度业绩"]
+    ):
+        return "季度报告"
+    elif any(k in title for k in ["INTERIM REPORT", "INTERIM RESULTS", "半年度报告", "半年度報告", "中期报告", "中期報告"]):
+        return "中期报告"
+    elif any(k in title for k in ["ANNUAL REPORT", "年度报告", "年度報告"]):
+        return "年度报告"
+    elif any(k in title for k in ["ANNUAL RESULTS", "FINANCIAL RESULTS", "UNAUDITED RESULTS", "AUDITED RESULTS", "业绩公告", "業績公告"]):
+        return "业绩公告"
+    return "公告"
+
 def fetch_hk_filings(
     ticker: str,
     doc_type: str = "all",
     max_items: int = 10,
     since_date: str = "2023-01-01",
     download_pdf: bool = False,
+    health: SourceHealth | None = None,
+    strict: bool = False,
+    until_date: str | None = None,
     **_kwargs,  # 兼容旧调用方的 max_pages 等参数
 ) -> list[dict]:
     """
@@ -118,6 +137,7 @@ def fetch_hk_filings(
     doc_type: "annual" / "interim" / "quarterly" / "earnings" / "all"
     返回：[{ticker, title, doc_type, fiscal_period, date, url, pdf_path}, ...]
     """
+    health = health if health is not None else SourceHealth("HKEX", ticker)
     if not ticker.upper().endswith(".HK"):
         logger.debug(f"[{ticker}] 非港股，跳过 HKEX 抓取")
         return []
@@ -125,12 +145,16 @@ def fetch_hk_filings(
     stock_code_5 = _parse_hk_ticker(ticker)
     if not stock_code_5:
         logger.error(f"[{ticker}] 无法解析股票代码")
+        health.fail("ticker", ValueError("Invalid HK ticker"))
+        health.finish(0, strict)
         return []
 
     time.sleep(REQUEST_INTERVAL_SECONDS)
     stock_id = _get_stock_index(stock_code_5)
     if stock_id is None:
         logger.error(f"[{ticker}] 未在 HKEX 活跃股票列表中找到 {stock_code_5}")
+        health.fail("stock_mapping", LookupError("HKEX stock index unavailable"))
+        health.finish(0, strict)
         return []
 
     t2codes = _DOC_TYPE_T2_MAP.get(doc_type, _DOC_TYPE_T2_MAP["all"])
@@ -138,17 +162,17 @@ def fetch_hk_filings(
 
     raw: list[dict] = []
 
-    for t2code in t2codes:
+    for t2code, language in ((code, lang) for code in t2codes for lang in ("en", "zh")):
         t1code, label = _T2_META.get(t2code, (-2, "公告"))
         time.sleep(REQUEST_INTERVAL_SECONDS)
         params = {
-            "lang": "en",
+            "lang": language,
             "market": "SEHK",
             "stockId": stock_id,
             "category": 0,
             "documentType": -1,
             "fromDate": since_date.replace("-", ""),
-            "toDate": date.today().strftime("%Y%m%d"),
+            "toDate": (until_date or beijing_date().isoformat()).replace("-", ""),
             "title": "",
             "searchType": 0,
             "t1code": t1code,
@@ -159,18 +183,38 @@ def fetch_hk_filings(
             "sortDir": 0,
         }
         try:
+            record = {"category": t2code, "language": language, "window_start": since_date, "window_end": params["toDate"]}
+            health.requests.append(record)
             resp = requests.get(_SEARCH_API, params=params, headers=_HEADERS, timeout=15)
             resp.raise_for_status()
             data = resp.json()
-            items = json.loads(data.get("result", "[]"))
+            if "result" not in data:
+                raise ValueError("HKEX result missing")
+            items = json.loads(data["result"]) if isinstance(data["result"], str) else data["result"]
+            if not isinstance(items, list):
+                raise ValueError("HKEX result is not a list")
+            health.successful_requests += 1
+            record["returned"] = len(items)
+            more = bool(data.get("hasNextRow")) or int(data.get("recordCnt") or 0) > len(items)
+            if more or ("hasNextRow" not in data and len(items) >= max_items):
+                health.limitations.append(f"Category {t2code} may be truncated at {max_items}")
         except Exception as e:
+            health.fail(f"category:{t2code}", e)
             logger.warning(f"HKEX titleSearchServlet 请求失败 [{ticker}] t2code={t2code}: {e}")
             continue
 
         for item in items:
+            codes = {code.zfill(5) for code in re.findall(r"\b\d{1,5}\b", str(item.get("STOCK_CODE", "")))}
+            if not codes:
+                health.fail("response_stock_code", ValueError("HKEX stock code missing"))
+                continue
+            if stock_code_5 not in codes:
+                continue
             file_link = item.get("FILE_LINK", "")
             doc_url = (_DOC_BASE + file_link) if file_link else ""
             doc_date = _parse_datetime(item.get("DATE_TIME", ""))
+            if not since_date <= doc_date <= (until_date or beijing_date().isoformat()):
+                continue
 
             pdf_path = None
             if download_pdf and doc_url.lower().endswith(".pdf"):
@@ -180,10 +224,13 @@ def fetch_hk_filings(
                 if _download_pdf(doc_url, save_path):
                     pdf_path = str(save_path)
 
+            item_label = label
+            if t2code == -2:
+                item_label = _classify_title(item.get("TITLE", ""))
             raw.append({
                 "ticker": ticker,
                 "title": item.get("TITLE", ""),
-                "doc_type": label,
+                "doc_type": item_label,
                 "fiscal_period": "",
                 "date": doc_date,
                 "url": doc_url,
@@ -194,7 +241,7 @@ def fetch_hk_filings(
     seen: set[tuple] = set()
     results: list[dict] = []
     for r in sorted(raw, key=lambda x: x["date"], reverse=True):
-        key = (r["title"], r["date"])
+        key = r["url"] or (r["title"], r["date"])
         if key not in seen:
             seen.add(key)
             results.append(r)
@@ -202,6 +249,9 @@ def fetch_hk_filings(
             break
 
     logger.info(f"[{ticker}] 找到 {len(results)} 条港股文件")
+    if len({r['url'] or (r['title'], r['date']) for r in raw}) > len(results):
+        health.limitations.append("Combined result limit reached")
+    health.finish(len(results), strict)
     return results
 
 

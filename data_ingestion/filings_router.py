@@ -5,6 +5,7 @@ data_ingestion/filings_router.py
 from __future__ import annotations
 
 from loguru import logger
+from data_ingestion.disclosure_health import SourceHealth
 
 from data_ingestion.cninfo_fetcher import fetch_periodic_reports
 from data_ingestion.hkex_fetcher import (
@@ -28,6 +29,8 @@ def _infer_market(ticker: str) -> str:
         return "A"
     if t.endswith(".HK"):
         return "HK"
+    if t.endswith(".NQ") and t[:-3].isdigit():
+        return "NEEQ"
     return "US"   # .O / .N / .A 等
 
 
@@ -35,6 +38,11 @@ def fetch_filings(
     ticker: str,
     doc_type: str = "all",
     max_items: int = 5,
+    *,
+    health: SourceHealth | None = None,
+    strict: bool = False,
+    since_date: str | None = None,
+    until_date: str | None = None,
 ) -> list[dict]:
     """
     统一入口：根据 ticker 路由到对应市场数据源。
@@ -53,8 +61,30 @@ def fetch_filings(
 
     results: list[dict] = []
 
+    if market == "NEEQ":
+        status = health if health is not None else SourceHealth("NEEQ", ticker)
+        status.fail("adapter_unavailable", NotImplementedError("No NEEQ disclosure adapter"))
+        logger.error(f"[{ticker}] NEEQ disclosure adapter unavailable; not a US SEC ticker")
+        status.finish(0, strict)
+        return []
+
+    if (health is not None or strict or since_date is not None) and market in {"HK", "US"}:
+        status = health if health is not None else SourceHealth(market, ticker)
+        if market == "HK":
+            items = fetch_hk_filings(ticker, doc_type=doc_type, max_items=max_items,
+                                    since_date=since_date or "2023-01-01", until_date=until_date, health=status)
+            results = [_normalize_hk(item) for item in items]
+        else:
+            forms = {"annual": ["10-K", "20-F"], "quarterly": ["10-Q", "6-K"], "interim": ["10-Q", "6-K"],
+                     "earnings": ["8-K", "6-K"], "all": ["10-K", "20-F", "10-Q", "8-K", "6-K"]}
+            items = fetch_sec_filings(ticker, forms.get(doc_type, forms["all"]), max_items=max_items,
+                                     since_date=since_date or "2023-01-01", health=status)
+            results = [_normalize_us(item) for item in items if not until_date or item["date"] <= until_date]
+        status.finish(len(results), strict)
+        return results
+
     if market == "A":
-        items = fetch_periodic_reports(ticker)
+        items = fetch_periodic_reports(ticker, health=health, strict=strict)
         for item in items:
             results.append({
                 "ticker": item["ticker"],

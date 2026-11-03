@@ -13,6 +13,7 @@ from pathlib import Path
 import schedule
 import time
 from loguru import logger
+from data_ingestion.disclosure_health import SourceHealth, SourceFetchError, beijing_date
 
 
 # ── 防休眠上下文（macOS caffeinate）────────────────────────────
@@ -101,15 +102,20 @@ def _job_fetch_and_parse() -> None:
     logger.info("═" * 50)
     logger.info("📡 开始每日公告抓取任务")
     company_names: dict[str, str] = {}
-    tickers = get_daily_tickers(company_names=company_names)
+    tickers = get_daily_tickers(company_names=company_names, strict=True)
     if not tickers:
         logger.warning("没有 Active/Watch 股票，跳过")
         return
 
     # 日常公告保留近3天；定期报告回溯7天，补回跨周末漏抓的披露。
-    cutoff_date = (date.today() - timedelta(days=3)).isoformat()
-    periodic_cutoff_date = (date.today() - timedelta(days=7)).isoformat()
-    all_announcements: dict[str, list[dict]] = batch_fetch(tickers, days_back=3, company_names=company_names)
+    today = beijing_date()
+    cutoff_date = (today - timedelta(days=3)).isoformat()
+    periodic_cutoff_date = (today - timedelta(days=7)).isoformat()
+    ordinary_health: dict[str, SourceHealth] = {}
+    periodic_health: list[SourceHealth] = []
+    all_announcements: dict[str, list[dict]] = batch_fetch(
+        tickers, days_back=3, company_names=company_names, health=ordinary_health, as_of=today,
+    )
     # CNINFO 可能忽略日期过滤，合并前分别应用各自窗口。
     for ticker, ann_list in all_announcements.items():
         all_announcements[ticker] = [
@@ -118,17 +124,23 @@ def _job_fetch_and_parse() -> None:
     for ticker in tickers:
         if ticker.endswith((".SH", ".SZ", ".BJ")):
             try:
-                periodic = fetch_periodic_reports(ticker, days_back=7, company_name=company_names.get(ticker))
-                existing = {a["title"] for a in all_announcements.get(ticker, [])}
+                status = SourceHealth("CNINFO periodic", ticker)
+                periodic_health.append(status)
+                periodic = fetch_periodic_reports(
+                    ticker, days_back=7, company_name=company_names.get(ticker), health=status, as_of=today,
+                )
+                existing = {a.get("url") or (a.get("date"), a["title"]) for a in all_announcements.get(ticker, [])}
                 new_items = [
                     a for a in periodic
-                    if a["title"] not in existing
+                    if (a.get("url") or (a.get("date"), a["title"])) not in existing
                     and (not a.get("date") or a["date"] >= periodic_cutoff_date)
                 ]
                 all_announcements.setdefault(ticker, []).extend(new_items)
             except Exception as e:
+                status.fail("periodic", e)
                 logger.error(f"定期报告抓取失败 [{ticker}]: {e}")
     written = 0
+    processing_errors = []
 
     for ticker, ann_list in all_announcements.items():
         for ann in ann_list:
@@ -137,7 +149,7 @@ def _job_fetch_and_parse() -> None:
                 continue
             try:
                 event_type = _infer_event_type(ann.get("title", ""))
-                event_date = ann.get("date", date.today().isoformat())
+                event_date = ann.get("date", today.isoformat())
                 source_url = ann.get("url", "")
                 if event_exists(ticker, event_type, event_date, source_url):
                     logger.debug(f"[{ticker}] 幂等跳过（解析前）: {ann.get('title')}")
@@ -148,8 +160,9 @@ def _job_fetch_and_parse() -> None:
                     event_type=event_type,
                 )
                 if not parsed:
+                    processing_errors.append(f"{ticker}:empty_parse")
                     continue
-                parsed["event_date"] = ann.get("date", date.today().isoformat())
+                parsed["event_date"] = ann.get("date", today.isoformat())
                 parsed["source_url"] = ann.get("url", "")
                 page_id = create_event(ticker, parsed)
                 if page_id:
@@ -162,9 +175,14 @@ def _job_fetch_and_parse() -> None:
                     if parsed.get("importance") == "High" and page_id:
                         _trigger_research_async(ticker, page_id)
             except Exception as e:
+                processing_errors.append(f"{ticker}:{type(e).__name__}")
                 logger.error(f"处理公告失败 [{ticker}]: {e}")
 
     logger.info(f"📊 公告抓取完成，写入 Notion {written} 条")
+    failed = [s for s in [*ordinary_health.values(), *periodic_health] if s.errors]
+    if failed or processing_errors:
+        raise SourceFetchError("Disclosure collection incomplete: " + ", ".join(
+            [*(f"{s.ticker}:{s.status}" for s in failed), *processing_errors]))
 
 
 # ── 每日 07:45 — HK/US 公开文件抓取 ─────────────────────────
@@ -178,16 +196,21 @@ def job_fetch_filings() -> None:
 def _job_fetch_filings() -> None:
     logger.info("═" * 50)
     logger.info("📡 开始 HK/US 文件抓取任务")
-    tickers = get_daily_tickers()
+    tickers = get_daily_tickers(strict=True)
     hk_us = [t for t in tickers if not (t.endswith(".SH") or t.endswith(".SZ") or t.endswith(".BJ"))]
     if not hk_us:
         logger.info("没有 HK/US Active 股票，跳过")
         return
 
     written = 0
+    statuses = []
+    today = beijing_date()
     for ticker in hk_us:
+        status = SourceHealth("HK/US", ticker)
+        statuses.append(status)
         try:
-            filings = fetch_filings(ticker, doc_type="all")
+            filings = fetch_filings(ticker, doc_type="all", max_items=100, health=status,
+                                    since_date=(today - timedelta(days=7)).isoformat(), until_date=today.isoformat())
             for filing in filings:
                 parsed = {
                     "event_type": filing.get("doc_type", "公告"),
@@ -217,9 +240,13 @@ def _job_fetch_filings() -> None:
                             pdf_path=None,
                         )
         except Exception as e:
+            status.fail("filings_job", e)
             logger.error(f"HK/US 文件抓取失败 [{ticker}]: {e}")
 
     logger.info(f"📊 HK/US 文件抓取完成，写入 Notion {written} 条")
+    if any(s.errors or s.limitations for s in statuses):
+        raise SourceFetchError("HK/US disclosure collection incomplete: " + ", ".join(
+            f"{s.ticker}:{s.status}" for s in statuses if s.errors or s.limitations))
 
 
 # ── 每日 08:00 — 当日监控简报 ───────────────────────────────

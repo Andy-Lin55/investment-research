@@ -1,7 +1,7 @@
 from copy import deepcopy
 from datetime import date, timedelta
 from types import SimpleNamespace
-from unittest.mock import Mock, call
+from unittest.mock import ANY, Mock, call
 
 import pytest
 
@@ -30,6 +30,7 @@ def daily(monkeypatch):
 
     state = SimpleNamespace(ordinary=[], periodic=[], stored=set(), written=[], actions=[], honor_window=False)
     monkeypatch.setattr(jobs, "date", Monday)
+    monkeypatch.setattr(jobs, "beijing_date", lambda: Monday.today())
     monkeypatch.setattr(jobs, "get_daily_tickers", lambda **kwargs: [TICKER])
     state.batch = Mock(side_effect=lambda tickers, days_back, **kwargs: {TICKER: deepcopy(state.ordinary)})
 
@@ -89,8 +90,8 @@ def test_monday_recovers_thursday_and_friday_periodic_reports(daily, day, honor_
     assert event["event_date"] == day
     assert event["source_url"] == report["url"]
     assert daily.actions == ["check", "parse", "create"]
-    daily.fetch.assert_called_once_with(TICKER, days_back=7, company_name=None)
-    daily.batch.assert_called_once_with([TICKER], days_back=3, company_names={})
+    daily.fetch.assert_called_once_with(TICKER, days_back=7, company_name=None, health=ANY, as_of=date(2026, 11, 2))
+    daily.batch.assert_called_once_with([TICKER], days_back=3, company_names={}, health=ANY, as_of=date(2026, 11, 2))
 
 
 @pytest.mark.parametrize("day, accepted", [("2026-10-26", True), ("2026-10-25", False)])
@@ -113,7 +114,7 @@ def test_ordinary_announcements_keep_three_day_cutoff(daily, day, accepted):
     assert len(daily.written) == int(accepted)
     assert daily.parse.call_count == int(accepted)
     assert daily.exists.call_count == int(accepted)
-    daily.batch.assert_called_once_with([TICKER], days_back=3, company_names={})
+    daily.batch.assert_called_once_with([TICKER], days_back=3, company_names={}, health=ANY, as_of=date(2026, 11, 2))
 
 
 def test_duplicate_recovered_periodic_is_checked_before_parsing_across_runs(daily):
@@ -168,7 +169,7 @@ def test_daily_reuses_roster_names_for_code_to_name_recovery_before_ai(daily, mo
     from zoneinfo import ZoneInfo
     from data_ingestion import cninfo_fetcher
 
-    def roster(company_names=None):
+    def roster(company_names=None, **kwargs):
         if company_names is not None:
             company_names[TICKER] = "嘉益股份"
         return [TICKER]
@@ -200,3 +201,51 @@ def test_daily_reuses_roster_names_for_code_to_name_recovery_before_ai(daily, mo
     assert daily.written[0][1]["source_url"] == "http://static.cninfo.com.cn/finalpage/2026-10-29/1225636692.PDF"
     assert daily.actions == ["check", "parse", "create", "check"]
     assert roster_read.call_count == 2  # One roster read per daily run, shared by both fetch paths.
+
+
+def test_failed_source_cannot_finish_daily_job_green(daily, monkeypatch):
+    import requests
+    from data_ingestion import cninfo_fetcher
+
+    monkeypatch.setattr(jobs, "batch_fetch", cninfo_fetcher.batch_fetch)
+    monkeypatch.setattr(jobs, "fetch_periodic_reports", cninfo_fetcher.fetch_periodic_reports)
+    monkeypatch.setattr(cninfo_fetcher, "REQUEST_INTERVAL_SECONDS", 0)
+    monkeypatch.setattr(cninfo_fetcher.requests, "post", Mock(side_effect=requests.ConnectionError("offline")))
+
+    with pytest.raises(RuntimeError):
+        jobs._job_fetch_and_parse()
+    daily.parse.assert_not_called()
+    assert daily.written == []
+
+
+def test_same_title_different_originals_are_not_discarded_before_idempotency(daily):
+    daily.ordinary = [filing("2026-10-30", identifier="original")]
+    daily.periodic = [filing("2026-10-30", identifier="revision")]
+
+    jobs._job_fetch_and_parse()
+
+    assert len(daily.written) == 2
+    assert daily.parse.call_count == 2
+
+
+def test_failed_parser_cannot_finish_daily_job_green(daily):
+    daily.periodic = [filing()]
+    daily.parse.side_effect = None
+    daily.parse.return_value = {}
+    with pytest.raises(RuntimeError):
+        jobs._job_fetch_and_parse()
+
+
+def test_hk_us_source_failure_is_reported_by_daily_job(daily, monkeypatch):
+    from data_ingestion.disclosure_health import SourceFetchError
+
+    monkeypatch.setattr(jobs, "get_daily_tickers", lambda **kwargs: ["QFIN.O"])
+
+    def fetch(ticker, **kwargs):
+        if "health" in kwargs:
+            kwargs["health"].fail("contact_configuration", ValueError("missing"))
+        return []
+
+    monkeypatch.setattr(jobs, "fetch_filings", fetch)
+    with pytest.raises(SourceFetchError):
+        jobs._job_fetch_filings()

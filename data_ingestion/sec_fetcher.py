@@ -13,6 +13,7 @@ from typing import Optional
 
 import requests
 from loguru import logger
+from data_ingestion.disclosure_health import SourceHealth
 
 from config.settings import TMP_ANNOUNCEMENTS, REQUEST_INTERVAL_SECONDS, MAX_RETRIES, SEC_USER_AGENT
 
@@ -163,14 +164,24 @@ def fetch_sec_filings(
     form_types: list[str],
     max_items: int = 5,
     since_date: str = "2023-01-01",
+    *,
+    health: SourceHealth | None = None,
+    strict: bool = False,
 ) -> list[dict]:
     """
     通过 SEC EDGAR Submissions API 抓取指定 filing 类型。
 
     返回：[{ticker, title, form_type, fiscal_period, date, url, pdf_path}, ...]
     """
+    health = health if health is not None else SourceHealth("SEC", ticker)
+    if not SEC_USER_AGENT or "research@invest.com" in SEC_USER_AGENT or "@" not in SEC_USER_AGENT:
+        health.fail("contact_configuration", ValueError("Real SEC contact required"))
+        health.finish(0, strict)
+        return []
     cik = get_cik(ticker)
     if not cik:
+        health.fail("cik_resolution", LookupError("CIK unavailable"))
+        health.finish(0, strict)
         return []
 
     logger.info(f"抓取 SEC filings [{ticker}] forms={form_types}")
@@ -181,8 +192,14 @@ def fetch_sec_filings(
         resp = requests.get(url, headers=_HEADERS, timeout=20)
         resp.raise_for_status()
         data = resp.json()
+        if not isinstance(data.get("filings", {}).get("recent", {}).get("form"), list):
+            raise ValueError("SEC recent filings missing")
+        health.requests.append({"endpoint": "submissions", "cik": cik, "since_date": since_date})
+        health.successful_requests += 1
     except Exception as e:
+        health.fail("submissions", e)
         logger.error(f"Submissions API 请求失败 [{ticker}]: {e}")
+        health.finish(0, strict)
         return []
 
     recent = data.get("filings", {}).get("recent", {})
@@ -191,6 +208,8 @@ def fetch_sec_filings(
     docs = recent.get("primaryDocument", [])
     accessions = recent.get("accessionNumber", [])
     periods = recent.get("reportDate", [])
+    if dates and min(dates) > since_date and data.get("filings", {}).get("files"):
+        health.limitations.append("Older submissions files may overlap requested window")
 
     results = []
     for i, form in enumerate(forms):
@@ -230,6 +249,10 @@ def fetch_sec_filings(
             break
 
     logger.info(f"[{ticker}] 找到 {len(results)} 条 {form_types} filings")
+    eligible = sum(form in form_types and i < len(dates) and dates[i] >= since_date for i, form in enumerate(forms))
+    if eligible > len(results):
+        health.limitations.append("SEC result limit reached")
+    health.finish(len(results), strict)
     return results
 
 

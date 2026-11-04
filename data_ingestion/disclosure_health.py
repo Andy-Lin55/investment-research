@@ -40,7 +40,12 @@ class SourceHealth:
 
     def fail(self, operation: str, error: Exception) -> None:
         # Exception bodies may contain URLs, request data or credentials.
-        self.errors.append({"operation": operation, "error_type": type(error).__name__})
+        record = {"operation": operation, "error_type": type(error).__name__}
+        response = getattr(error, "response", None)
+        http_status = getattr(response, "status_code", None)
+        if isinstance(http_status, int):
+            record["http_status"] = http_status
+        self.errors.append(record)
 
     def finish(self, count: int, strict: bool = False) -> None:
         self.item_count = count

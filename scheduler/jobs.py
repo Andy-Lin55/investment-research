@@ -211,7 +211,10 @@ def _report_filings_coverage(statuses: list[SourceHealth]) -> None:
         if status.status == "complete":
             continue
         reasons = [status.blocked_reason] if status.blocked_reason else []
-        reasons.extend(f"{error['operation']} ({error['error_type']})" for error in status.errors)
+        for error in status.errors:
+            http_status = error.get("http_status")
+            detail = f"{error['error_type']} HTTP {http_status}" if http_status is not None else error["error_type"]
+            reasons.append(f"{error['operation']} ({detail})")
         reasons.extend(status.limitations)
         ticker = status.ticker.replace("|", "&#124;").replace("\n", " ").replace("\r", " ")
         reason = ", ".join(reasons).replace("|", "&#124;").replace("\n", " ").replace("\r", " ")
@@ -221,6 +224,34 @@ def _report_filings_coverage(statuses: list[SourceHealth]) -> None:
     if summary_path:
         with Path(summary_path).open("a", encoding="utf-8") as summary:
             summary.write("\n".join(lines) + "\n\n")
+
+
+def _is_expected_filing_gap(status: SourceHealth, complete_tickers: set[str]) -> bool:
+    """Only isolate identified source outages; data and write errors remain fatal."""
+    if not status.finished or not status.errors or status.limitations:
+        return False
+
+    suffix = status.ticker.upper().rsplit(".", 1)[-1]
+    if suffix == "HK":
+        if not any(ticker.upper().endswith(".HK") for ticker in complete_tickers):
+            return False
+        http_statuses = {429, 500, 502, 503, 504}
+    elif suffix == "NQ" and complete_tickers:
+        http_statuses = {403, 429, 500, 502, 503, 504}
+    else:
+        return False
+
+    for error in status.errors:
+        operation = error["operation"]
+        if suffix == "HK" and not operation.startswith("category:"):
+            return False
+        if suffix == "NQ" and operation != "disclosure_inventory":
+            return False
+        if error["error_type"] in {"Timeout", "ReadTimeout", "ConnectTimeout", "ConnectionError"}:
+            continue
+        if error["error_type"] != "HTTPError" or error.get("http_status") not in http_statuses:
+            return False
+    return True
 
 
 def _job_fetch_filings() -> None:
@@ -252,7 +283,7 @@ def _job_fetch_filings() -> None:
                     "detailed_analysis": filing.get("title", ""),
                     "key_numbers": {},
                 }
-                page_id = create_event(ticker, parsed)
+                page_id = create_event(ticker, parsed, strict=True)
                 if page_id:
                     written += 1
                     attach_document_subpage(
@@ -275,7 +306,17 @@ def _job_fetch_filings() -> None:
 
     logger.info(f"📊 HK/US 文件抓取完成，写入 Notion {written} 条")
     _report_filings_coverage(statuses)
-    failed = [status for status in statuses if status.status not in {"complete", "blocked"}]
+    complete_tickers = {status.ticker for status in statuses if status.status == "complete"}
+    failed = []
+    for status in statuses:
+        if status.status in {"complete", "blocked"}:
+            continue
+        if _is_expected_filing_gap(status, complete_tickers):
+            if os.environ.get("GITHUB_ACTIONS") == "true":
+                ticker = status.ticker.replace("\n", " ").replace("\r", " ")
+                print(f"::warning title=Filing coverage incomplete::{ticker} has a source access gap. See the run summary.")
+        else:
+            failed.append(status)
     if failed:
         raise SourceFetchError("HK/US disclosure collection incomplete: " + ", ".join(
             f"{s.ticker}:{s.status}" for s in failed))
@@ -322,11 +363,16 @@ def _send_briefing(subject: str, body: str, today: str) -> None:
             )
             with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=30) as s:
                 s.login(SMTP_USER, SMTP_PASS)
-                s.send_message(msg)
+                refused = s.send_message(msg)
+            if refused:
+                raise RuntimeError(f"SMTP refused {len(refused)} recipient(s)")
             logger.info(f"✅ SMTP 简报已发送：{subject} → {BRIEFING_TO_EMAIL}")
             return
         except Exception as e:
             logger.error(f"SMTP 发送失败: {e}")
+
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        raise RuntimeError("Daily briefing delivery failed")
 
     # ── 3. Apple Mail 草稿（macOS 降级）────────────────────────
     try:
@@ -382,7 +428,7 @@ def _job_daily_briefing(*, preview_only: bool = False) -> None:
         )
     except Exception as e:
         logger.error(f"简报查询 Notion 失败: {e}")
-        if preview_only:
+        if preview_only or os.environ.get("GITHUB_ACTIONS") == "true":
             raise
         return
 

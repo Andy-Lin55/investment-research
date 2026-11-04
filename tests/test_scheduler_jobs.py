@@ -399,3 +399,60 @@ def test_cloud_briefing_analyzes_disclosures_in_parallel_and_keeps_every_result(
         "earnings": "earnings", "shareholder-meeting": "shareholder-meeting",
     }
     send.assert_not_called()
+
+
+@pytest.mark.parametrize("with_hk_peer", [True, False])
+def test_known_per_ticker_outages_warn_but_whole_hk_source_failure_fails(monkeypatch, tmp_path, capsys, with_hk_peer):
+    import requests
+    from data_ingestion.disclosure_health import SourceFetchError
+
+    tickers = ["1658.HK", "830806.NQ", "BRK.B"] + (["0700.HK"] if with_hk_peer else [])
+    monkeypatch.setattr(jobs, "get_daily_tickers", lambda **kwargs: tickers)
+    summary = tmp_path / "coverage.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+
+    def collect(ticker, *, health, **kwargs):
+        if ticker == "1658.HK":
+            health.fail("category:-2:en", requests.ReadTimeout())
+        if ticker == "830806.NQ":
+            response = requests.Response()
+            response.status_code = 403
+            health.fail("disclosure_inventory", requests.HTTPError(response=response))
+        health.finish(0)
+        return []
+
+    monkeypatch.setattr(jobs, "fetch_filings", collect)
+    if with_hk_peer:
+        jobs._job_fetch_filings()
+        assert capsys.readouterr().out.count("::warning") == 2
+    else:
+        with pytest.raises(SourceFetchError, match="1658.HK"):
+            jobs._job_fetch_filings()
+    coverage = summary.read_text()
+    assert "category:-2:en (ReadTimeout)" in coverage
+    assert "disclosure_inventory (HTTPError HTTP 403)" in coverage
+
+
+def test_filing_notion_rejection_is_not_downgraded_to_a_source_warning(monkeypatch):
+    import httpx
+    from notion_client import APIResponseError
+    from notion_client.errors import APIErrorCode
+    from data_ingestion.disclosure_health import SourceFetchError
+    from notion_sync import sync_manager
+
+    monkeypatch.setattr(jobs, "get_daily_tickers", lambda **kwargs: ["0700.HK"])
+
+    def collect(ticker, *, health, **kwargs):
+        health.finish(1)
+        return [{"url": "https://www1.hkexnews.hk/listedco/listconews/sehk/filing.pdf", "date": "2026-11-04"}]
+
+    monkeypatch.setattr(jobs, "fetch_filings", collect)
+    client = Mock()
+    client.databases.query.return_value = {"results": []}
+    response = httpx.Response(400, request=httpx.Request("POST", "https://api.notion.com/v1/pages"))
+    client.pages.create.side_effect = APIResponseError(response, "rejected", APIErrorCode.ValidationError)
+    monkeypatch.setattr(sync_manager, "get_client", lambda: client)
+
+    with pytest.raises(SourceFetchError, match="0700.HK"):
+        jobs._job_fetch_filings()

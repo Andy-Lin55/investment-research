@@ -64,6 +64,24 @@ def render(task,result,files):
                     *[value(v) for v in row['values'][offset:offset+6]]] for row in item['rows']]))
         blocks.append(block('paragraph','利润表和现金流量表非年度期间为年初至今累计；资产负债表为期末数。货币资金与现金等价物口径不同，缺项留空。'))
     if result.get('financial_gaps'):blocks.append(block('paragraph','财务数据待核验：'+'；'.join(result['financial_gaps'])))
+    guidance = result.get('management_guidance_comparison', {})
+    if guidance.get('rows'):
+        blocks.append(block('heading_3', '自有预测与公司指引对照'))
+        headings = ['指标／期间', '情景', '公司指引区间', '自有预测', '距区间差额', '原文']
+        rows = []
+        for row in guidance['rows']:
+            is_eps = row['metric'] == 'eps'
+            scale = 1 if is_eps else 1e8
+            metric = '基本EPS（元/股）' if is_eps else '归母净利（亿元）'
+            position = {'above': '高于上限', 'below': '低于下限', 'within': '区间内'}[row['position']]
+            rows.append([metric+'／'+str(row['year']), row['case'],
+                         value(row['low']/scale)+' 至 '+value(row['high']/scale), value(row['own']/scale),
+                         position+' '+value(row['difference']/scale),
+                         row['published_at'][:10]+' p'+str(row['source_page'])])
+        blocks.append(table(headings, rows))
+    if guidance.get('gaps'):
+        blocks.append(block('paragraph', '公司指引待核验：'+ '；'.join(
+            str(gap['year'])+' 年最新披露的区间或版本无法唯一确认' for gap in guidance['gaps'])))
     comparison=result.get('forecast_comparison',{})
     if comparison.get('comparable'):
         blocks.append(block('heading_3','自有预测与机构预期对照'))

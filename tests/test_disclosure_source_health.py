@@ -137,3 +137,19 @@ def test_daily_roster_missing_results_is_not_clean_empty(monkeypatch):
     monkeypatch.setattr(sync_manager, "get_client", lambda: client)
     with pytest.raises(SourceFetchError):
         sync_manager.get_daily_tickers(strict=True)
+
+
+def test_hk_timeout_retries_one_request_before_marking_a_gap(monkeypatch):
+    from data_ingestion import hkex_fetcher as hk
+
+    monkeypatch.setattr(hk, "_get_stock_index", lambda code: 123)
+    monkeypatch.setattr(hk, "REQUEST_INTERVAL_SECONDS", 0)
+    success = Mock()
+    success.json.return_value = {"result": [], "hasNextRow": False}
+    network = Mock(side_effect=[requests.ReadTimeout(), success, success])
+    monkeypatch.setattr(hk.requests, "get", network)
+    health = SourceHealth("HKEX", "1658.HK")
+
+    assert hk.fetch_hk_filings("1658.HK", health=health, strict=True) == []
+    assert health.successful_requests == 2
+    assert [call.kwargs["params"]["lang"] for call in network.call_args_list] == ["en", "en", "zh"]

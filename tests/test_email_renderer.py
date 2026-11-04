@@ -122,6 +122,7 @@ def test_smtp_job_sends_both_email_versions_without_network(monkeypatch):
     monkeypatch.setattr(settings, "BRIEFING_TO_EMAIL", "reader@example.com")
     connection = MagicMock()
     connection.__enter__.return_value = connection
+    connection.send_message.return_value = {}
     monkeypatch.setattr(smtplib, "SMTP_SSL", lambda *args, **kwargs: connection)
 
     _send_briefing("投研日报", BODY, "2026-10-23")
@@ -130,3 +131,22 @@ def test_smtp_job_sends_both_email_versions_without_network(monkeypatch):
     assert message.get_content_type() == "multipart/alternative"
     assert "关键数据" in message.get_body(preferencelist=("html",)).get_content()
     assert message.get_body(preferencelist=("plain",)).get_content().strip() == BODY.strip()
+
+
+def test_cloud_delivery_failure_is_not_reported_as_success(monkeypatch):
+    import smtplib
+    import pytest
+    from config import settings
+    from scheduler.jobs import _send_briefing
+
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setattr(settings, "FEISHU_WEBHOOK", "")
+    monkeypatch.setattr(settings, "SMTP_USER", "sender@example.com")
+    monkeypatch.setattr(settings, "SMTP_PASS", "test-password")
+    connection = MagicMock()
+    connection.__enter__.return_value = connection
+    connection.send_message.return_value = {"reader@example.com": (550, b"Recipient rejected")}
+    monkeypatch.setattr(smtplib, "SMTP_SSL", lambda *args, **kwargs: connection)
+
+    with pytest.raises(RuntimeError, match="Daily briefing delivery failed"):
+        _send_briefing("投研日报", BODY, "2026-10-23")

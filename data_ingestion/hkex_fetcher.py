@@ -51,6 +51,23 @@ _HEADERS = {
 }
 
 
+def _get_with_retry(url: str, **kwargs):
+    """Retry one transient official GET; do not retry a malformed payload."""
+    try:
+        response = requests.get(url, headers=_HEADERS, timeout=15, **kwargs)
+        response.raise_for_status()
+        return response
+    except (requests.Timeout, requests.ConnectionError, requests.HTTPError) as error:
+        if isinstance(error, requests.HTTPError):
+            status = error.response.status_code if error.response is not None else None
+            if status not in {429, 500, 502, 503, 504}:
+                raise
+        time.sleep(REQUEST_INTERVAL_SECONDS)
+        response = requests.get(url, headers=_HEADERS, timeout=15, **kwargs)
+        response.raise_for_status()
+        return response
+
+
 def _get_stock_index(stock_code_5: str) -> Optional[int]:
     """
     返回 HKEX titleSearchServlet 要求的内部 stockId 索引。
@@ -59,8 +76,7 @@ def _get_stock_index(stock_code_5: str) -> Optional[int]:
     global _STOCK_IDX_CACHE
     if not _STOCK_IDX_CACHE:
         try:
-            resp = requests.get(_STOCK_LIST_URL, headers=_HEADERS, timeout=15)
-            resp.raise_for_status()
+            resp = _get_with_retry(_STOCK_LIST_URL)
             for entry in resp.json():
                 code = str(entry.get("c", "")).zfill(5)
                 idx = entry.get("i")
@@ -185,8 +201,7 @@ def fetch_hk_filings(
         try:
             record = {"category": t2code, "language": language, "window_start": since_date, "window_end": params["toDate"]}
             health.requests.append(record)
-            resp = requests.get(_SEARCH_API, params=params, headers=_HEADERS, timeout=15)
-            resp.raise_for_status()
+            resp = _get_with_retry(_SEARCH_API, params=params)
             data = resp.json()
             if "result" not in data:
                 raise ValueError("HKEX result missing")
@@ -199,7 +214,7 @@ def fetch_hk_filings(
             if more or ("hasNextRow" not in data and len(items) >= max_items):
                 health.limitations.append(f"Category {t2code} may be truncated at {max_items}")
         except Exception as e:
-            health.fail(f"category:{t2code}", e)
+            health.fail(f"category:{t2code}:{language}", e)
             logger.warning(f"HKEX titleSearchServlet 请求失败 [{ticker}] t2code={t2code}: {e}")
             continue
 

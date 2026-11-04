@@ -283,7 +283,7 @@ def _job_fetch_filings() -> None:
                     "detailed_analysis": filing.get("title", ""),
                     "key_numbers": {},
                 }
-                page_id = create_event(ticker, parsed)
+                page_id = create_event(ticker, parsed, strict=True)
                 if page_id:
                     written += 1
                     attach_document_subpage(

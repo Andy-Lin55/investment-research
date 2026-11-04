@@ -432,3 +432,27 @@ def test_known_per_ticker_outages_warn_but_whole_hk_source_failure_fails(monkeyp
     coverage = summary.read_text()
     assert "category:-2:en (ReadTimeout)" in coverage
     assert "disclosure_inventory (HTTPError HTTP 403)" in coverage
+
+
+def test_filing_notion_rejection_is_not_downgraded_to_a_source_warning(monkeypatch):
+    import httpx
+    from notion_client import APIResponseError
+    from notion_client.errors import APIErrorCode
+    from data_ingestion.disclosure_health import SourceFetchError
+    from notion_sync import sync_manager
+
+    monkeypatch.setattr(jobs, "get_daily_tickers", lambda **kwargs: ["0700.HK"])
+
+    def collect(ticker, *, health, **kwargs):
+        health.finish(1)
+        return [{"url": "https://www1.hkexnews.hk/listedco/listconews/sehk/filing.pdf", "date": "2026-11-04"}]
+
+    monkeypatch.setattr(jobs, "fetch_filings", collect)
+    client = Mock()
+    client.databases.query.return_value = {"results": []}
+    response = httpx.Response(400, request=httpx.Request("POST", "https://api.notion.com/v1/pages"))
+    client.pages.create.side_effect = APIResponseError(response, "rejected", APIErrorCode.ValidationError)
+    monkeypatch.setattr(sync_manager, "get_client", lambda: client)
+
+    with pytest.raises(SourceFetchError, match="0700.HK"):
+        jobs._job_fetch_filings()

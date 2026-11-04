@@ -226,7 +226,7 @@ def get_all_tickers() -> list[str]:
     return tickers
 
 
-def create_event(ticker: str, parsed_data: dict) -> Optional[str]:
+def create_event(ticker: str, parsed_data: dict, *, strict: bool = False) -> Optional[str]:
     """
     在 Events DB 创建一条事件记录
     parsed_data 结构见 pdf_parser.py 的返回格式
@@ -286,6 +286,8 @@ def create_event(ticker: str, parsed_data: dict) -> Optional[str]:
         return page_id
     except APIResponseError as e:
         logger.error(f"Notion API 错误 create_event [{ticker}]: {e}")
+        if strict:
+            raise
         return None
 
 

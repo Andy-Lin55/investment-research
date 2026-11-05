@@ -77,6 +77,21 @@ def render(task,result,files):
                     *[value(v) for v in row['values'][offset:offset+6]]] for row in item['rows']]))
         blocks.append(block('paragraph','利润表和现金流量表非年度期间为年初至今累计；资产负债表为期末数。货币资金与现金等价物口径不同，缺项留空。'))
     if result.get('financial_gaps'):blocks.append(block('paragraph','财务数据待核验：'+'；'.join(result['financial_gaps'])))
+    progress=result.get('forecast_progress',{})
+    if progress.get('rows'):
+        quarter={'03-31':'余下三个季度','06-30':'下半年','09-30':'第四季度'}[progress['actual_period'][5:]]
+        blocks.append(block('heading_3','最新累计实际与全年预测'))
+        blocks.append(block('paragraph','截至 '+progress['actual_period']+'；'+quarter+'隐含值 = 全年情景减已披露累计实际，便于下次复核。'))
+        labels={'revenue':'营业收入','parent_net_income':'归母净利','operating_cashflow':'经营现金流'}
+        cases={'base':'基准','bull':'乐观','bear':'悲观'}
+        cells=[]
+        for row in progress['rows']:
+            scale=1e8 if max(abs(row['reported_ytd']),abs(row['full_year']))>=1e8 else 1
+            unit=progress['currency']+(' 亿' if scale==1e8 else '')
+            cells.append([labels[row['metric']]+'／'+unit,cases[row['case']],
+                *[value(row[k]/scale if row[k] is not None else None)
+                for k in ('reported_ytd','full_year','implied_remainder','prior_remainder')]])
+        blocks.append(table(['指标／单位','情景','本年累计实际','全年预测',quarter+'隐含值','去年同段实际'],cells))
     guidance = result.get('management_guidance_comparison', {})
     if guidance.get('rows'):
         blocks.append(block('heading_3', '自有预测与公司指引对照'))

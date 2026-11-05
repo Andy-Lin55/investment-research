@@ -154,6 +154,10 @@ def build_adapters(*,store,drive,reports,env,documents,reasoner=None,baseline=No
         candidate['management_guidance_comparison'] = compare_management_guidance(
             candidate.get('model'), payload['coverage']['documents'], issuer_id=task['issuer_id'],
             as_of=task.get('updated_at',task['created_at'])[:10])
+        from research.forecast_progress import compare_with_reported_progress
+        candidate['forecast_progress']=compare_with_reported_progress(candidate.get('model'),
+            payload['coverage'].get('financial_data',{}),tickers=task['profile']['tickers'],
+            as_of=task.get('updated_at',task['created_at'])[:10])
         candidate['candidate_status']=candidate['status'];candidate['status']='ready' if candidate.get('model') and candidate['model']['status']=='ready_for_review' else 'partial'
         from research.existing_data import broker_history
         candidate['historical_tables']=payload['coverage'].get('financial_data',{}).get('historical_tables',[])
@@ -192,6 +196,7 @@ def build_adapters(*,store,drive,reports,env,documents,reasoner=None,baseline=No
             financial_gaps=payload['coverage'].get('financial_data',{}).get('gaps',[]),
             market_snapshot=payload['coverage'].get('financial_data',{}).get('market_snapshot'),
             forecast_comparison=payload['model'].get('comparison',{}),
+            forecast_progress=payload['model'].get('forecast_progress',{}),
             management_guidance_comparison=payload['model'].get('management_guidance_comparison',{}),
             source_index=[dict(revision_id=d['revision_id'],document_id=d.get('document_id',str(d.get('report_id'))),
                 url=d.get('source',{}).get('url')) for d in [*payload['coverage']['documents'],*payload.get('retrieval',{}).get('reports',[])]])

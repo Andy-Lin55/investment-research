@@ -74,3 +74,36 @@ def test_sec_aliases_that_match_different_issuers_remain_unresolved(monkeypatch)
         assert url.endswith('company_tickers.json')
         return {'0':dict(cik_str=123,ticker='BRK.B'),'1':dict(cik_str=456,ticker='BRK-B')}
     with pytest.raises(api().CoverageError):api().sec('BRK.B','2026-10-01','2026-10-28',request)
+
+
+def test_cninfo_exact_directory_route_pages_and_rejects_cross_listing():
+    calls=[]
+    def request(method,url,**kw):
+        if method=='GET':return {'stockList':[dict(code='002475',orgId='issuer-id'),dict(code='02475',orgId='issuer-id')]}
+        args=kw['data'];calls.append(args)
+        assert args['stock']=='002475,issuer-id' and args['column']=='szse'
+        page=args['pageNum']
+        return {'announcements':[dict(secCode='002475',orgId='issuer-id',announcementId=str(page),
+                   announcementTitle='三季度报告',announcementTime=1793232000000,adjunctUrl='file.pdf'),
+                   dict(secCode='02475',orgId='issuer-id',announcementId='hk-'+str(page))],
+                'totalAnnouncement':4,'hasMore':page==1}
+    out=api().cninfo_exact('002475.SZ','2026-10-26','2026-11-03',request)
+    assert [r['document_id'] for r in out]==['1','2'] and len(calls)==2
+
+
+def test_cninfo_exact_repeated_page_does_not_masquerade_as_complete():
+    def request(method,url,**kw):
+        if method=='GET':return {'stockList':[dict(code='002475',orgId='issuer-id')]}
+        return {'announcements':[dict(secCode='002475',orgId='issuer-id',announcementId='repeat',
+                announcementTitle='报告',announcementTime=1793232000000,adjunctUrl='file.pdf')],
+                'totalAnnouncement':2,'hasMore':kw['data']['pageNum']==1}
+    with pytest.raises(api().CoverageError,match='repeated'):
+        api().cninfo_exact('002475.SZ','2026-10-26','2026-11-03',request)
+
+
+def test_distribution_and_earnings_meeting_are_not_full_three_statement_reports():
+    classify=api().document_type
+    assert classify('2026年第三季度利润分配预案')=='重大公告'
+    assert classify('2026年三季度报告')=='季度报告'
+    assert classify('2026年10月31日-11月2日投资者关系活动记录表')=='业绩会材料'
+    assert classify('关于召开2026年第三季度业绩说明会的公告')=='业绩会材料'

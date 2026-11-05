@@ -120,3 +120,48 @@ Installed Microsoft Excel on macOS verified five synthetic cases by editing and 
 ## Broker originals and sampled expectations
 
 See [broker-evidence.md](broker-evidence.md) for explicit FX search/acquisition, immutable PDF provenance, entitlement reconciliation and the broker-enabled quality contract. Existing scheduled workflows remain unchanged.
+# v17 通用工作流（独立开发，默认关闭）
+
+入口为 `python -m research.v17`，独立开关 `RESEARCH_V17_ENABLED=true` 加显式 `--write` 才允许读云端和写队列。旧每日简报、周度财务更新和原研究试点入口不随 v17 启用；旧研究 worker 会跳过 v17 任务及控制记录。
+
+运行顺序为 `scan --write` → `worker --write --limit 3`；`weekly --write` 为全部已确认 Active 创建轻筛，资料和到期问题均无变化时不调用模型。有变化或问题到期则转订阅深研，云端保存阶段请求；在个人电脑执行 `local --write` 只提交订阅候选，再由单一云端 publisher 校验和交付。电脑关机时的业绩／重大公告走预算内云端 API，不等待本地订阅。
+
+自然日发现及周度扫描在独立 `research_discovery.yml` 中，只有主分支和 v17 开关都满足才执行。与原研究试点共用单一 publisher 并发组，避免 Graph token 轮换和同一公司发布冲突。不得将本地订阅凭据放入 Actions。
+
+公司配置沿用私有 issuer registry，增加 `research_profile`，例如以下虚构配置：
+
+```json
+{
+  "issuer_id":"example-issuer",
+  "identity_confirmed":true,
+  "tickers":["000000.SZ"],
+  "company_path":"投资/示例行业/示例公司",
+  "research_profile":{
+    "research_question":"经营变化是否改善可持续回报？",
+    "sector_template":"industrial",
+    "fiscal_year_end":"12-31",
+    "sources":["official"],
+    "company_aliases":["示例公司","Example Company"],
+    "max_broker_reports":5,
+    "evidence_terms":["现金转换","客户集中度"],
+    "broker_queries":["示例公司 盈利预测"]
+  }
+}
+```
+
+Status＝Active 来自实时 Notion roster，不能靠上面的虚构配置自行创建持仓。未确认映射、未设置核心问题或不支持的行业模板均明确保留缺口。当前经过验证的联动模板是 **12 月结算的 industrial**；银行及其他业务或非自然年模板不自动套用，不能宣称全行业已覆盖。
+
+`context_files`、`context_pages` 和已映射 `financial_workbook_path` 会读取对应公司 OneDrive／Notion 历史资料，保持为历史分析或带缺口的缓存财务。不得把旧研究当成新事实；正式基线仍由 `research-current.json` 及人工采纳状态控制。所有模型假设显式标为研究候选。
+
+正式披露、政策与外部信息使用原有官方来源适配器。政策／行业／交易信息通过 `RESEARCH_OFFICIAL_FEEDS_JSON` 明确配置 issuer exposure 和分类；RSS 摘要不能当原文。无相应来源配置就不宣称该类信息已全面扫描。发现失败不推进该来源水位。首次补扫与历史三表归档分开；单轮新增原件有边界，未扫完保留 partial，后续复用已缓存原件继续。
+
+发现报告须另外开启 `RESEARCH_BROKER_SOURCES_ENABLED` 并配置研究专用 `FXBAOGAO_API_KEY`。每次最多使用六份原文、每轮最多六个查询、最多两轮补证。原文要通过封面主体／代码匹配；异常副本保存在“待核验”，搜索命中和译文不能直接当原文。资料扣额与模型预算分别记录，未知下载结果不盲目重试。
+
+模型 API 计价未知时保留 `waiting_budget`，不调用付费模型；额度仍为单次 2／每日 10／每月 100 元。本地订阅仅供可等待任务。阶段请求、回复、原件、模型 JSON／Excel 及结果都按版本归档；交付失败重用已生成结果，避免重付模型费用。
+
+Notion 正文显示持有逻辑、差异、三表关键数、EPS／情景估值、反证及行动条件。最新累计实际与全年预测按同一口径对照，列出剩余期间隐含的收入、归母利润和经营现金流，以及上年同期实际（如有）；未披露的单项不填零。同一持有逻辑沿用稳定 ID；本次缺少证据而未复核的逻辑继续跟踪，不视为确认或撤销。AI 研究版本与人工采纳版本分开：发布回读成功才推进自动研究状态，正式模型和人工持有逻辑不被自动改写。部分研究不能标成完整／已审核报告。
+
+A 股标准基线的长期借款如在数据接口留空，仅在匹配同公司同期间的合并年报、原表该栏明确空白，且其他非流动负债与已核对小计完整勾稽时，才给模型使用可追溯的零值。历史三表原始空值不改写。
+
+上线仍需真实样本、跨公司／跨期／事件验证、已确认 Active 覆盖清单、实际计价与云端权限检查，以及 3–5 家连续 14 天试跑。离线回归和单份报告不是该运行验收。开发期间不要打开生产开关。
+

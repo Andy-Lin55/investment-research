@@ -8,7 +8,7 @@ from datetime import datetime
 from io import BytesIO
 from zipfile import ZipFile
 
-from financials.forecast import BASE_FIELDS, DRIVERS, number, project
+from financials.forecast import BASE_FIELDS, DRIVERS, number, project,driver_fields
 
 CASES = ('base', 'bull', 'bear')
 ROWS = {5:'收入',6:'营业成本',7:'经营费用',8:'折旧',9:'利息',10:'税前利润',11:'所得税',
@@ -70,7 +70,7 @@ def export_model(model):
     refs={};index=1
     for name in CASES:
         for period in model['assumptions'][name]:
-            for field in DRIVERS:
+            for field in driver_fields(model['baseline']):
                 assumptions.write_row(index,0,[name,period['year'],field],label)
                 value=period.get('values',{}).get(field)
                 if number(value):assumptions.write_number(index,3,value,editable)
@@ -86,6 +86,11 @@ def export_model(model):
     for name in CASES:
         sheet=sheets[name.title()];sheet.write_row(0,0,[name.upper()+'｜预测假设','历史基准'],header)
         for row,text in ROWS.items():sheet.write(row-1,0,text,label)
+        standard=model['baseline'].get('standard_model_version')==1
+        if standard:
+            sheet.write(8,0,'净财务费用代理',label)
+            for r,text in {60:'其他税前净损益',61:'其中：经营现金部分',62:'其中：投资现金部分',
+                           63:'其中：非现金部分',64:'加权平均股数假设',65:'股本与融资校验'}.items():sheet.write(r-1,0,text,label)
         for i,field in enumerate(BASE_FIELDS,2):
             sheet.write_formula(BASE_ROWS[field]-1,1,f'=Baseline!B{i}',numeric,model['baseline'][field])
         for col,period in enumerate(model['assumptions'][name],2):
@@ -94,7 +99,7 @@ def export_model(model):
             # Keep formulas in pending templates so filling every required input
             # can recalculate. Clearing any required value/source suppresses all
             # scenarios instead of treating a missing assumption as zero.
-            a={k:refs[name,year,k] for k in DRIVERS}
+            a={k:refs[name,year,k] for k in driver_fields(model['baseline'])}
             f={5:f'{p}5*(1+{a["growth"]})',6:f'{c}5*{a["cogs_ratio"]}',7:f'{c}5*{a["opex_ratio"]}',
                8:f'{p}20*{a["dep_rate"]}',9:f'({p}23+{c}23)/2*{a["interest_rate"]}',
                10:f'{c}5-{c}6-{c}7-{c}8-{c}9',11:f'MAX({c}10,0)*{a["tax_rate"]}',12:f'{c}10-{c}11',
@@ -109,6 +114,22 @@ def export_model(model):
                33:f'{c}5*{a["capex_ratio"]}',34:f'MAX({c}12,0)*{a["dividend_payout"]}',35:f'{c}17-{p}17',
                38:f'SUM({c}17:{c}21)-SUM({c}22:{c}25)',39:f'{c}35-{c}29-{c}30-{c}31-{c}32',
                40:f'MAX(0,-{c}17)',43:a['pe_multiple'],44:f'IF({c}14>0,{c}14*{c}43,"")'}
+            if standard:
+                f.update({60:a['other_pretax_income'],61:f'{c}60*{a["other_income_operating_cash_ratio"]}',
+                    62:f'{c}60*{a["other_income_investing_cash_ratio"]}',63:f'{c}60-{c}61-{c}62',64:a['weighted_average_shares'],
+                    10:f'{c}5-{c}6-{c}7-{c}9+{c}60',14:f'{c}13/{c}64',
+                    21:f'{p}21+{c}63+{a["other_equity_change"]}',
+                    25:f'{p}25+{c}12-{c}34+{a["equity_issuance"]}+{a["other_equity_change"]}+{a["fx_cash"]}',
+                    29:f'{c}12+{c}8-(({c}18-{p}18)+({c}19-{p}19)-({c}22-{p}22))-{c}60+{c}61',30:f'-{c}33+{c}62'})
+            tolerance=.01 if standard else 1e-6
+            good=[f'{c}14>0',f'{c}40=0',f'MAX(C40:{c}40)=0',
+                  f'MAX(C38:{c}39)<={tolerance}',f'MIN(C38:{c}39)>=-{tolerance}']
+            if standard:
+                share_checks=[f'{c}64>=MIN({p}26,{c}26)',f'{c}64<=MAX({p}26,{c}26)',f'{c}64>0',
+                    f'SIGN({a["equity_issuance"]})=SIGN({a["share_change"]})']
+                f[65]=f'AND({",".join(share_checks)})'
+                good.extend([f'MIN(C20:{c}21)>=0',f'MIN(C23:{c}23)>=0',f'COUNTIF(C65:{c}65,TRUE)=COLUMNS(C65:{c}65)'])
+            f[44]=f'IF(AND({",".join(good)}),{c}14*{c}43,"")'
             caches={r:'' for r in f}
             if model['scenarios']:
                 row=model['scenarios'][name][col-2];inc=row['income'];bal=row['balance'];cf=row['cashflow']
@@ -117,10 +138,13 @@ def export_model(model):
                 caches.update(dict(zip(range(29,36),[cf[k] for k in ('operating','investing','financing','fx','capex','dividends','change')])))
                 caches.update({38:row['checks']['balance_difference'],39:row['checks']['cash_difference'],
                                40:row['funding_shortfall'],43:row['valuation']['multiple'],44:row['valuation']['price']})
+                if standard:caches.update({60:inc['other_pretax_income'],61:cf['other_income_operating'],
+                    62:cf['other_income_investing'],63:cf['other_income_noncash'],64:inc['weighted_average_shares'],65:True})
             for r,formula in f.items():
                 sheet.write_formula(r-1,col,'=IF(Assumptions!$G$2,'+formula+',"")',numeric,caches[r] if caches[r] is not None else '')
         last=xl_col_to_name(len(model['assumptions'][name])+1)
-        sheet.conditional_format(f'C38:{last}39',{'type':'cell','criteria':'not between','minimum':-1e-6,'maximum':1e-6,
+        tolerance=.01 if standard else 1e-6
+        sheet.conditional_format(f'C38:{last}39',{'type':'cell','criteria':'not between','minimum':-tolerance,'maximum':tolerance,
             'format':book.add_format({'bg_color':'#FFDAD6'})})
     changes=sheets['Changes'];changes.write_row(0,0,['Scenario','Year','Driver','Previous','Current','Source'],header)
     changes.set_column('F:F',65)
@@ -148,7 +172,7 @@ def import_assumptions(data,original):
     for i,key in enumerate(BASE_FIELDS,2):
         if [book['Baseline'].cell(i,c).value for c in (1,2,3)]!=[key,original['baseline'][key],original['baseline']['source_locator']]:
             raise ValueError('baseline changed; supply a separately verified source baseline')
-    s=deepcopy(original['assumptions']);expected=[(name,row['year'],field) for name in CASES for row in s[name] for field in DRIVERS]
+    s=deepcopy(original['assumptions']);expected=[(name,row['year'],field) for name in CASES for row in s[name] for field in driver_fields(original['baseline'])]
     sheet=book['Assumptions']
     if sheet.max_row!=len(expected)+1:raise ValueError('assumption row count differs')
     positions={(name,row['year']):row for name in CASES for row in s[name]}

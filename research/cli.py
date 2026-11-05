@@ -119,7 +119,9 @@ def graph_drive(env):
     elif cache:sink=lambda value:secure_token_file(cache,value)
     else:raise ValueError('safe token rotation destination not configured')
     access=refresh_graph(env['ONEDRIVE_CLIENT_ID'],token,oauth_post,sink)
-    return GraphDrive(HTTP('https://graph.microsoft.com/v1.0',{'Authorization':'Bearer '+access}))
+    return GraphDrive(HTTP('https://graph.microsoft.com/v1.0',{'Authorization':'Bearer '+access},
+        curl_downloads=env.get('RESEARCH_GRAPH_CURL_DOWNLOADS')=='true'),
+        simple_staging=env.get('RESEARCH_GRAPH_SIMPLE_STAGING')=='true')
 
 
 def registry(env,drive=None):
@@ -142,7 +144,12 @@ def active_records(http,env):
 def active_roster(http,env,reg):
     records=active_records(http,env)
     if any(not r['ticker'] for r in records):raise ValueError('Active listing has no ticker')
-    return match_roster([r['ticker'] for r in records],reg)
+    result=match_roster([r['ticker'] for r in records],reg)
+    for holding in result['holdings']:
+        if not holding.get('company_aliases'):
+            holding['company_aliases']=sorted({r.get('name','').strip() for r in records
+                if r['ticker'] in holding['active_tickers'] and r.get('name','').strip()})
+    return result
 
 
 def scan(roster,store,drive,*,start,end):
@@ -211,6 +218,7 @@ def select_tasks(tasks,active_issuers,*,limit,day):
     runnable={'pending','retry_delivery','retry_provider','waiting_subscription','pending_followup_confirmation'}
     selected=[]
     for task in tasks:
+        if task.get('workflow_contract')=='holdings-v17' or task.get('record_type')=='control':continue
         if task['issuer_id'] not in active_issuers or task['status'] in {'retry_release','published','completed','superseded_source_resolved','evidence_only'}:continue
         eligible=task['status'] in runnable or task.get('retry_requested') is True
         if task['status']=='budget_blocked' and task.get('blocked_on_day')!=day:eligible=True

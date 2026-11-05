@@ -148,6 +148,8 @@ def test_different_company_and_year_complete_through_real_durable_adapters_after
     ('2026年第一季度报告\n第三节 财务报表','季度报告','2026-03-31'),
     ('2026年季度报告\n第一节 重要提示\n第三节 管理层讨论','季度报告',None),
     ('2026年半年度报告\n第一节 重要提示','中期报告','2026-06-30'),
+    ('2025 年度報告\n2026年3月','年度报告','2025-12-31'),
+    ('2026 Interim Report','中期报告','2026-06-30'),
 ])
 def test_report_period_uses_filing_type_and_explicit_period_not_section_ordinals(text,kind,expected):
     from research.v17_live import period_end

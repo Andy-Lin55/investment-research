@@ -99,10 +99,10 @@ def period_end(title,kind,profile):
     text=re.sub(r'\s+','',title)
     year=r'(?<!\d)(20\d{2})'
     if kind=='年度报告':
-        m=re.search(year+r'(?:年?年度报告|年报|AnnualReport)',text,re.I)
+        m=re.search(year+r'(?:年?年度[报報]告|年[报報]|AnnualReport)',text,re.I)
         return f"{m[1]}-{profile.get('fiscal_year_end','12-31')}" if m else None
     if kind in {'半年度报告','中期报告'}:
-        m=re.search(year+r'年?(?:半年度?|中期|Q2)',text,re.I)
+        m=re.search(year+r'年?(?:半年度?|中期|InterimReport|Q2)',text,re.I)
         return m[1]+'-06-30' if m else None
     if kind in {'季度报告','第一季度报告','第三季度报告'}:
         m=re.search(year+r'年?(?:第?([一二三四1234])季|Q([1-4])(?!\d))',text,re.I)

@@ -102,3 +102,27 @@ def test_latest_guidance_survives_noise_in_inventory_and_prompt(monkeypatch):
     assert any(r['document_id']=='forecast' for r in docs)
     material=compact_material({'coverage':{'documents':docs}},task)
     assert next(r for r in material['coverage']['documents'] if r['document_id']=='forecast')['pages']==items[0]['pages']
+
+
+def test_cached_annual_extraction_repairs_period_without_downloading_original_again():
+    import json
+    from financials.forecast import digest
+    from research.v17_live import OfficialSource
+    from research.workflow import control
+    from research.runtime import MemoryStore
+    from tests.test_broker_sources import Drive
+    from tests.test_research_profiles import profile
+    from research.profiles import resolve_profile
+    p=resolve_profile(profile(),{});s=MemoryStore();drive=Drive()
+    row={'document_id':'old-annual','document_type':'年度报告','title':'2025年年度报告','metadata_revision':'meta'}
+    doc=dict(row,issuer_id=p['issuer_id'],revision_id='a'*64,period_end='2025-09-30',
+        pages=[{'page':1,'text':'2025年年度报告\n详见第三节管理层讨论'}])
+    saved=drive.put_immutable(p['company_path']+'/old.json',json.dumps(doc).encode())
+    key='v17:original:'+digest([p['issuer_id'],row['document_id']])
+    s.put(control(key,p['issuer_id'],metadata_revision='meta',reference=saved))
+    def forbidden(url):raise AssertionError('existing original must not be downloaded again')
+    src=OfficialSource(s,drive,downloader=forbidden)
+    updated,new=src.original(p,row)
+    assert updated['path']!=saved['path'] and s.get(key)['reference']==updated
+    assert new['period_end']=='2025-12-31' and new['revision_id']==doc['revision_id']
+    assert json.loads(drive.read(saved['path'])[0])['period_end']=='2025-09-30'

@@ -94,15 +94,31 @@ def read_ref(drive,ref):
 
 
 def period_end(title,kind,profile):
-    years=re.findall(r'(?<!\d)(20\d{2})(?!\d)',title)
-    if not years:return None
-    year=int(years[0])
-    if re.search(r'第三|三季|Q3',title,re.I):return f'{year}-09-30'
-    if re.search(r'第一|一季|Q1',title,re.I):return f'{year}-03-31'
-    if re.search(r'半年|中期|INTERIM|Q2',title,re.I):return f'{year}-06-30'
-    if kind=='年度报告':return f"{year}-{profile.get('fiscal_year_end','12-31')}"
+    # The first pages often contain numbered sections and the publication year.
+    # Only a year attached to an explicit reporting period identifies the filing.
+    text=re.sub(r'\s+','',title)
+    year=r'(?<!\d)(20\d{2})'
+    if kind=='年度报告':
+        m=re.search(year+r'(?:年?年度报告|年报|AnnualReport)',text,re.I)
+        return f"{m[1]}-{profile.get('fiscal_year_end','12-31')}" if m else None
+    if kind in {'半年度报告','中期报告'}:
+        m=re.search(year+r'年?(?:半年度?|中期|Q2)',text,re.I)
+        return m[1]+'-06-30' if m else None
+    if kind in {'季度报告','第一季度报告','第三季度报告'}:
+        m=re.search(year+r'年?(?:第?([一二三四1234])季|Q([1-4])(?!\d))',text,re.I)
+        if m:
+            quarter=m[2] or m[3]
+            end=dict(zip('一二三四1234',['03-31','06-30','09-30','12-31']*2))[quarter]
+            return m[1]+'-'+end
     return None
 
+
+def _filing_period(pages,row,profile):
+    kind=row['document_type']
+    result=period_end('\n'.join(p['text'] for p in pages[:2]),kind,profile)
+    if not result and not row.get('title_is_scheduling_metadata'):
+        result=period_end(row['title'],kind,profile)
+    return result
 
 
 def history_start(day):
@@ -134,7 +150,11 @@ class OfficialSource:
     def original(self,profile,row,*,force=False):
         key='v17:original:'+digest([profile['issuer_id'],row['document_id']]);saved=self.store.get(key)
         if saved and not force and saved['metadata_revision']==row['metadata_revision']:
-            return saved['reference'],read_ref(self.drive,saved['reference'])
+            doc=read_ref(self.drive,saved['reference'])
+            period=_filing_period(doc['pages'],row,profile)
+            if period==doc.get('period_end'):return saved['reference'],doc
+            doc['period_end']=period
+            return self._archive_document(key,profile,row,doc)
         raw=self.downloader(row['url']);kind='pdf' if raw.startswith(b'%PDF') else 'html'
         sha=hashlib.sha256(raw).hexdigest();base=profile['company_path']+'/01_原始资料/公司公告/'+sha
         original=self.drive.put_immutable(base+'.'+kind,raw)
@@ -142,14 +162,16 @@ class OfficialSource:
         if parsed['partial'] or not parsed['text'].strip():raise ValueError('complete readable source extraction required')
         chunks=re.split(r'\[PDF page (\d+)\]\s*',parsed['text'])
         pages=[{'page':int(chunks[i]),'text':chunks[i+1]} for i in range(1,len(chunks),2)] if kind=='pdf' else [{'page':1,'text':parsed['text']}]
-        report_period=period_end('\n'.join(p['text'] for p in pages[:2]),row['document_type'],profile)
-        if not report_period and not row.get('title_is_scheduling_metadata'):
-            report_period=period_end(row['title'],row['document_type'],profile)
+        report_period=_filing_period(pages,row,profile)
         document=dict(issuer_id=profile['issuer_id'],document_id=row['document_id'],revision_id=sha,
             document_type=row['document_type'],title=row['title'],published_at=row['published_at'],
             publication_precision=row.get('publication_precision','timestamp'),
             metadata_revision=row['metadata_revision'],period_end=report_period,
             pages=pages,total_pages=parsed['total_pages'],source={'url':row['url'],'original':original},ticker=row['ticker'])
+        return self._archive_document(key,profile,row,document)
+
+    def _archive_document(self,key,profile,row,document):
+        base=profile['company_path']+'/01_原始资料/公司公告/'+document['revision_id']
         ref=self.drive.put_immutable(base+'-'+digest(document)+'.json',json.dumps(document,ensure_ascii=False,allow_nan=False).encode())
         self.store.put(control(key,profile['issuer_id'],metadata_revision=row['metadata_revision'],reference=ref))
         return ref,document

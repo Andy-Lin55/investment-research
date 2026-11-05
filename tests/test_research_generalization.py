@@ -140,3 +140,15 @@ def test_different_company_and_year_complete_through_real_durable_adapters_after
     assert saved['last_published_research']['verified'] is True
     assert saved['source_revisions']=={'filing-'+issuer:'source-'+issuer}
     assert len([x for x in http.rows.values() if x['parent']['data_source_id']=='reports'])==1
+
+
+@pytest.mark.parametrize('text,kind,expected',[
+    ('2025 年年度报告全文\n2026 年 4 月\n第一节 重要提示\n详见第三节 管理层讨论','年度报告','2025-12-31'),
+    ('2026 年10月\n2026年第三季度报告\n上期为2025年度报告','季度报告','2026-09-30'),
+    ('2026年第一季度报告\n第三节 财务报表','季度报告','2026-03-31'),
+    ('2026年季度报告\n第一节 重要提示\n第三节 管理层讨论','季度报告',None),
+    ('2026年半年度报告\n第一节 重要提示','中期报告','2026-06-30'),
+])
+def test_report_period_uses_filing_type_and_explicit_period_not_section_ordinals(text,kind,expected):
+    from research.v17_live import period_end
+    assert period_end(text,kind,profile())==expected

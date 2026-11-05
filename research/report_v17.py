@@ -1,4 +1,6 @@
 """Readable research updates with program-computed model tables in the body."""
+from collections import Counter
+
 from research.report_view import block,table,value,rich
 
 
@@ -84,14 +86,48 @@ def render(task,result,files):
             str(gap['year'])+' 年最新披露的区间或版本无法唯一确认' for gap in guidance['gaps'])))
     comparison=result.get('forecast_comparison',{})
     if comparison.get('comparable'):
-        blocks.append(block('heading_3','自有预测与机构预期对照'))
+        blocks.append(block('heading_3','自有基准预测与机构预期对照'))
+        blocks.append(block('paragraph','仅展示已读机构样本，不代表市场共识。差额为自有基准减机构值；驱动未经核验的部分保留为未归因。'))
         rows=comparison['comparable']
+        labels={'revenue':'营业收入','parent_net_income':'归母净利','eps':'基本EPS'}
         for offset in range(0,len(rows),30):
-            blocks.append(table(['指标／期间／币种','预测所有者','机构值','自有值','差异','未解释差异'],
-                [[x['metric']+'/'+x['period_end']+'/'+x['currency'],x['estimate_owner'],value(x['value']),
-                  value(x['own_value']),value(x['absolute_difference']),value(x['unexplained_difference'])] for x in rows[offset:offset+30]]))
-    if comparison.get('incomparable'):
-        blocks.append(block('paragraph','不可比／未准入预测：'+'；'.join(x.get('reason','dimensions not aligned') for x in comparison['incomparable'])))
+            shown=rows[offset:offset+30]
+            cells=[]
+            for x in shown:
+                scale=1e8 if x['metric']!='eps' and max(abs(x['value']),abs(x['own_value']))>=1e8 else 1
+                unit=x['currency']+('/股' if x['metric']=='eps' else ' 亿' if scale==1e8 else '')
+                source=(x['published_at']+' p'+str(x['source_page'])) if x.get('published_at') else x['source_ref']
+                trigger_day=task.get('trigger',{}).get('published_at','')[:10]
+                if trigger_day and x.get('published_at') and x['published_at'] < trigger_day:
+                    source+='（事件前）'
+                cells.append([labels.get(x['metric'],x['metric'])+'/'+x['period_end']+'/'+unit,x['estimate_owner'],
+                    *[value(x[k]/scale) for k in ('value','own_value','absolute_difference','unexplained_difference')],source])
+            section=table(['指标／期间／单位','机构','机构预测','自有基准','差额','未解释差异','预测日期／原文'],cells)
+            for child,x,cell in zip(section['table']['children'][1:],shown,cells):
+                child['table_row']['cells'][-1]=rich(cell[-1],url=x.get('source_url'))
+            blocks.append(section)
+    if comparison.get('profit_bridges'):
+        blocks.append(block('heading_3','归母利润差额：收入与净利率'))
+        blocks.append(block('paragraph','先按机构的归母净利率计算收入差额的影响，再按自有收入计算净利率差额的影响。拆分仅说明差额落在哪，业务归因仍需证据。'))
+        rows=comparison['profit_bridges']
+        for offset in range(0,len(rows),30):
+            cells=[]
+            for row in rows[offset:offset+30]:
+                scale=1e8 if max(abs(row[k]) for k in ('total_difference','revenue_effect','margin_effect'))>=1e8 else 1
+                cells.append([row['estimate_owner']+'／'+row['period_end'][:4],row['currency']+(' 亿' if scale==1e8 else ''),
+                    value(row['broker_margin']*100)+'% → '+value(row['own_margin']*100)+'%',
+                    *[value(row[k]/scale) for k in ('revenue_effect','margin_effect','total_difference')]])
+            blocks.append(table(['机构／财年','单位','归母净利率：机构 → 自有','收入差贡献','净利率差贡献','利润总差额'],cells))
+    reasons=Counter(x.get('reason','dimensions not aligned') for x in comparison.get('incomparable',[]))
+    if reasons:
+        labels={'unmatched_dimensions_or_provenance':'期间、币种或科目口径不匹配，或缺少可比较的自有预测'}
+        blocks.append(block('paragraph','不可比预测：'+'；'.join(f'{labels.get(reason,reason)}（{count}项）' for reason,count in reasons.items())))
+    if comparison.get('source_gaps'):
+        labels={'broker_original_or_as_of_unverified':'原文或发布日期未通过核验',
+                'no_unambiguous_annual_forecast_cells':'未能确认同口径的年度预测单元格',
+                'same_date_conflicting_estimates':'同日原文数值冲突，未纳入比较'}
+        gaps=list(dict.fromkeys((g.get('estimate_owner') or '来源未知')+'：'+labels[g['reason']] for g in comparison['source_gaps']))
+        blocks.append(block('paragraph','机构预测待核验：'+'；'.join(gaps)))
     if not comparison.get('comparable'):
         blocks.append(block('paragraph','尚无通过主体、期间、币种及会计口径核对的机构数值；不据此声称全市场预期。'))
     model=result.get('model_snapshot')

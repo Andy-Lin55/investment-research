@@ -137,15 +137,17 @@ def build_adapters(*,store,drive,reports,env,documents,reasoner=None,baseline=No
         for a in raw.get('assumptions',[]):
             if not set(a.get('source_refs',[]))<=allowed:raise StageWait('quality_blocked',['assumption_source_not_read'])
         brokers={d.get('revision_id'):d for d in payload.get('retrieval',{}).get('reports',[])}
-        for estimate in raw.get('broker_estimates',[]):
-            doc=brokers.get(estimate.get('source_ref'));quote=estimate.get('quote','')
-            if (estimate.get('issuer_id')!=task['issuer_id'] or not doc or not quote
-                    or not any(quote in p['text'] for p in doc.get('pages',[]))):
-                raise StageWait('quality_blocked',['broker_estimate_identity_or_source_not_verified'])
-        candidate=build_candidate_inputs(raw.get('facts',[]),raw.get('guidance',[]),raw.get('broker_estimates',[]),
+        from research.broker_forecasts import broker_forecasts
+        estimates, estimate_gaps = broker_forecasts(brokers.values(), task['profile'],
+            as_of=task.get('updated_at',task['created_at'])[:10])
+        candidate=build_candidate_inputs(raw.get('facts',[]),raw.get('guidance',[]),estimates,
             raw.get('assumptions',[]),prior_baseline=task['previous_state'].get('accepted_baseline'),
             as_of=task.get('updated_at',task['created_at'])[:10],profile=task['profile'],admitted_source_refs=list(brokers),
             mapped_baseline=payload['coverage'].get('financial_data',{}).get('baseline_mapping'))
+        from research.forecast_inputs import compare_forecasts
+        if 'comparison' not in candidate:
+            candidate['comparison']=compare_forecasts(candidate,estimates)
+        candidate['comparison']['source_gaps']=estimate_gaps
         if candidate.get('model') and candidate['model']['issuer_id']!=task['issuer_id']:
             raise StageWait('quality_blocked',['computed_model_issuer_mismatch'])
         from research.guidance_comparison import compare_management_guidance

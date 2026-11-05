@@ -13,7 +13,7 @@ REPORT_SCHEMA=dict(research_question='原公司核心问题',research_status='co
     holding_logic=[dict(id='稳定逻辑ID',claim='持有理由或候选',change='strengthened/unchanged/weakened',
         reason='证据如何改变逻辑',falsifier='可观察证伪条件',evidence=['原文revision_id'])],
     key_disagreement='最重要的预期差异及自己的解释',
-    earnings_differences=[dict(metric='指标与期间',reason='差异贡献或具体不可比/缺口',status='comparable或unavailable',evidence=['原文revision_id'])],
+    earnings_differences=[dict(metric='指标与期间',reason='差异贡献或具体不可比/缺口',status='有程序核验的机构对照为comparable，否则unavailable',evidence=['原文revision_id'])],
     valuation_status='complete或pending',valuation_reason='程序复算情景、价格隐含预期及限制',
     changes=[dict(text='变化及模型影响',evidence=['原文revision_id'])],
     counterevidence=[dict(text='反证、替代解释及证据强弱',evidence=['原文revision_id'])],
@@ -90,6 +90,12 @@ def compact_material(payload,task):
     model=out.get('model')
     if model:
         for key in ('facts','guidance','assumptions','candidate_inputs','baseline_mapping','historical_tables'):model.pop(key,None)
+        comparison=model.get('comparison')
+        if comparison:
+            for row in comparison.get('comparable',[]):
+                for key in ('quote','header_quote','ownership_quote','source_url'):row.pop(key,None)
+            skipped=comparison.pop('incomparable',[])
+            comparison['incomparable_count']=len(skipped)
         calculated=model.get('model')
         if calculated:
             notes={}
@@ -115,7 +121,7 @@ def stage_prompt(stage,payload,task):
                 source_ref='卖方原文revision_id',source_locator='p2',source_page=2,dimension_page=2,
                 dimension_quote='表头原文，包含期间A标记、币种、金额倍率、合并及年度或累计口径',
                 quote='包含数字及实际值A标记的逐字证据')],
-            guidance=[],broker_estimates=[],assumptions=[dict(scenario='base/bull/bear',year='财年整数',
+            guidance=[],assumptions=[dict(scenario='base/bull/bear',year='财年整数',
             field='financials.forecast.DRIVERS 中的字段',value='有限数值',kind='research_assumption',
             rationale='为何这样假设，与指引/同行的差异及风险',range=['下界','上界'],source_refs=['原文revision_id'])]),
         'judgment':dict(holding_logic=REPORT_SCHEMA['holding_logic'],key_disagreement='独立判断与替代解释',
@@ -166,6 +172,10 @@ def stage_prompt(stage,payload,task):
         '港美股可从已读卖方原文提取标记A的历史三表到historical_statements；标记E/F的预测不能填历史。'
         '先做标准三张表；行业专属指标不足不妨碍展示历史表，但专属估值和预测未验证时必须明确缺口。'
         '按经营驱动说明收入、利润/每股、现金或资本与估值变化；模型数字仅引用程序复算结果。'
+        '机构数值由程序从原文提取，不返回broker_estimates。仅在model.comparison.comparable有对应行时引用同口径预测；'
+        '明确券商、预测日期、与自有基准情景的差额，以及能验证的经营驱动。没有可证实的量化拆分时，把差额保留为未归因。'
+        'model.comparison.profit_bridges 把归母利润差额算术拆为收入和归母净利率两部分，不能据此推断某个业务或成本是原因。'
+        '已读的单家或多家机构仅是样本，公告前预测不能描述为公告后已更新的市场判断。'
         'management_guidance_comparison 是程序核验的公司指引区间和差额；有差额时解释可核查的驱动，未归因部分留待验证。'
         '给明确持有逻辑、关键分歧、反证和条件式行动。原文没有的机构预期不得虚构为共识。'
         'judgment可提出最多6个data_requests，系统会在最多两轮内实际补证；未解决则标partial。'
@@ -229,6 +239,11 @@ def validate_report(report,payload,task):
             if any(not isinstance(row.get(f),str) or not row[f].strip() for f in fields):raise ValueError('incomplete judgment item')
             if key=='holding_logic' and row['change'] not in {'strengthened','unchanged','weakened'}:raise ValueError('logic change required')
             if key=='holding_logic' and row['id'] in task['previous_state'].get('rejected_hypothesis_ids',[]):raise ValueError('rejected hypothesis reused')
+            if key=='earnings_differences':
+                if row['status'] not in {'comparable','unavailable'}:raise ValueError('explicit comparison status required')
+                comparable=payload.get('model',{}).get('comparison',{}).get('comparable',[])
+                if row['status']=='comparable' and not any(x['source_ref'] in refs for x in comparable):
+                    raise ValueError('comparable broker claim requires a cited computed comparison')
             if key=='next_actions':date.fromisoformat(row['due'])
     for q in report.get('questions',[]):
         if not q.get('id') or not q.get('need'):raise ValueError('identified follow-up required')

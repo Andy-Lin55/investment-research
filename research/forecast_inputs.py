@@ -74,13 +74,37 @@ def compare_forecasts(candidate: dict, comparators: list[dict]) -> dict:
     comparable=[];incomparable=[]
     for row in comparators:
         own=next((x for x in candidate.get('estimates',[]) if all(row.get(k) is not None and x.get(k)==row[k] for k in DIMENSIONS)),None)
-        if (not own or not number(row.get('value')) or row.get('source_ref') not in candidate.get('admitted_source_refs',[])
+        if (not own or not number(own.get('value')) or not number(row.get('value')) or row.get('source_ref') not in candidate.get('admitted_source_refs',[])
                 or not row.get('estimate_owner')):
             incomparable.append(dict(row,reason='unmatched_dimensions_or_provenance'));continue
         difference=own['value']-row['value']
         comparable.append(dict(row,own_value=own['value'],absolute_difference=difference,
             relative_difference=difference/abs(row['value']) if row['value'] else None,
             unexplained_difference=difference,note='Total difference; driver attribution requires comparable disclosed assumptions.'))
-    return dict(comparable=comparable,incomparable=incomparable,consensus_status='not_established')
+    return dict(comparable=comparable,incomparable=incomparable,
+        profit_bridges=_profit_bridges(comparable),consensus_status='not_established')
+
+
+def _profit_bridges(comparable):
+    # Hold the broker's margin fixed for the revenue step, then reprice at own revenue.
+    # This is an arithmetic bridge. It cannot identify the underlying operating cause.
+    def key(row):
+        return tuple(row.get(k) for k in ('issuer_id','source_ref','source_page','header_quote',
+            'published_at','estimate_owner','period_end','currency','scope'))
+    sales={key(r):r for r in comparable if r['metric']=='revenue' and r.get('header_quote')}
+    bridges=[]
+    for profit in comparable:
+        if profit['metric']!='parent_net_income':continue
+        revenue=sales.get(key(profit))
+        if not revenue or min(revenue['value'],revenue['own_value'])<=0:continue
+        broker_margin=profit['value']/revenue['value']
+        own_margin=profit['own_value']/revenue['own_value']
+        sales_effect=revenue['absolute_difference']*broker_margin
+        margin_effect=revenue['own_value']*(own_margin-broker_margin)
+        if not all(number(v) for v in (broker_margin,own_margin,sales_effect,margin_effect)):continue
+        bridges.append(dict(**{k:profit[k] for k in ('period_end','currency','estimate_owner','source_ref',
+                'source_page','published_at','source_url')},broker_margin=broker_margin,own_margin=own_margin,
+            revenue_effect=sales_effect,margin_effect=margin_effect,total_difference=profit['absolute_difference']))
+    return bridges
 
 

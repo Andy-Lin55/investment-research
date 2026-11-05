@@ -86,7 +86,7 @@ def build_adapters(*,store,drive,reports,env,documents,reasoner=None,baseline=No
         data=financial_data(task) if financial_data else {}
         if data.get('statements'):
             from research.standard_model import map_standard_baseline
-            data['baseline_mapping']=map_standard_baseline(data,task['profile'],as_of=task.get('updated_at',task['created_at'])[:10])
+            data['baseline_mapping']=map_standard_baseline(data,task['profile'],as_of=task.get('updated_at',task['created_at'])[:10],documents=docs)
         context_version=digest([prior['items'],data.get('market_snapshot'),data.get('baseline_mapping',{}).get('baseline_digest')]) if data else digest(prior['items'])
         if task['trigger']['kind']=='weekly_screen':
             versions={d['document_id']:d['revision_id'] for d in docs}

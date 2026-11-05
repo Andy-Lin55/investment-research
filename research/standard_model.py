@@ -8,7 +8,7 @@ from financials.statements import reconcile
 DEBT_FIELDS=('st_borr','lt_borr','bond_payable','non_cur_liab_due_1y')
 
 
-def map_standard_baseline(data,profile,*,as_of):
+def map_standard_baseline(data,profile,*,as_of,documents=()):
     out=dict(status='partial',baseline=None,lineage={},observations={},cash_bridge={},gaps=[],
         mapping_version=1,limitations=[
             '债务定义为借款、应付债券及一年内到期非流动负债；未单列租赁等负债保留在其他负债，不代表完整净债务。',
@@ -43,9 +43,17 @@ def map_standard_baseline(data,profile,*,as_of):
     out['annual_reconciliation']=checks
     out['gaps']=['annual_reconciliation:'+check['check'] for check in checks
         if check['status']=='fail' or (check['check']=='cash_rollforward' and check['status']!='pass')]
+    borrowed=None
+    if records['balancesheet']['values'].get('lt_borr') is None:
+        from research.baseline_evidence import long_term_borrowing_blank
+        borrowed=long_term_borrowing_blank(documents,records['balancesheet'],profile,cutoff=cutoff)
+    if borrowed:
+        out['limitations'].append('基期长期借款：数据接口留空；经同期间合并年报非流动负债小计勾稽，模型基线按零处理，原始历史值仍留空。')
     def term(kind,field,coefficient=1):
         r=records[kind];value=r['values'].get(field)
         unit='shares' if field=='total_share' else 'CNY'
+        if kind=='balancesheet' and field=='lt_borr' and borrowed:
+            return dict(borrowed,statement=kind,field=field,coefficient=coefficient,unit=unit,period_end=period)
         if not number(value):
             out['gaps'].append(kind+'.'+field);return None
         if r['units'].get(field)!=unit:raise ValueError('raw financial unit differs')
@@ -83,7 +91,8 @@ def map_standard_baseline(data,profile,*,as_of):
         amount_unit='CNY',share_unit='shares',amount_scale=1,share_scale=1,sector_template='industrial',
         cash_scope_confirmed=True,costs_include_depreciation=True,standard_model_version=1,
         finance_cost_scope='net_finance_expense_proxy',
-        revision_id=digest([r['revision_id'] for r in records.values()]+[out['mapping_version']]),
+        revision_id=digest([r['revision_id'] for r in records.values()]+[out['mapping_version']]
+            +([borrowed['source_ref']] if borrowed else [])),
         source_locator='; '.join(r['source_locator'] for r in records.values()))
     inc=records['income']['values'];cf=records['cashflow']['values']
     def observation(name,value,fields,note='历史观察值，不是未来假设。'):

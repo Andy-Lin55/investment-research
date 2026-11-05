@@ -177,7 +177,10 @@ def stage_prompt(stage,payload,task):
         'model.comparison.profit_bridges 把归母利润差额算术拆为收入和归母净利率两部分，不能据此推断某个业务或成本是原因。'
         '已读的单家或多家机构仅是样本，公告前预测不能描述为公告后已更新的市场判断。'
         'management_guidance_comparison 是程序核验的公司指引区间和差额；有差额时解释可核查的驱动，未归因部分留待验证。'
-        '给明确持有逻辑、关键分歧、反证和条件式行动。原文没有的机构预期不得虚构为共识。'
+        '给明确持有逻辑、关键分歧、反证和条件式行动。复核已有逻辑时沿用previous.holding_logic的ID；'
+        '没有新证据就不声称已经复核，程序会保留该逻辑并标注本次未复核。上一版AI候选不等于人工采纳。'
+        '每个行动说明可观察条件、对应判断及日期；证伪条件要能用后续披露验证。'
+        '原文没有的机构预期不得虚构为共识。'
         'judgment可提出最多6个data_requests，系统会在最多两轮内实际补证；未解决则标partial。'
         '报告中的完整与否依据研究覆盖，人工采纳状态独立。不要输出隐含思维链，只给可审阅的判断依据。\n'
         +serialized)
@@ -245,6 +248,18 @@ def validate_report(report,payload,task):
                 if row['status']=='comparable' and not any(x['source_ref'] in refs for x in comparable):
                     raise ValueError('comparable broker claim requires a cited computed comparison')
             if key=='next_actions':date.fromisoformat(row['due'])
+    ids=[row['id'] for row in report['holding_logic']]
+    if len(set(ids))!=len(ids):raise ValueError('duplicate holding logic identifier')
+    rejected=set(task['previous_state'].get('rejected_hypothesis_ids',[]))
+    previous={r['id']:r for r in task['previous_state'].get('holding_logic',[])
+              if r.get('id') and r['id'] not in rejected and r.get('claim')}
+    continuity=[]
+    for row in report['holding_logic']:
+        old=previous.get(row['id'])
+        continuity.append(dict(id=row['id'],status='reassessed' if old else 'new_candidate',
+            previous_claim=old['claim'] if old else None))
+    continuity.extend(dict(id=key,status='not_reassessed',previous_claim=old['claim'],
+        previous_falsifier=old.get('falsifier')) for key,old in previous.items() if key not in ids)
     for q in report.get('questions',[]):
         if not q.get('id') or not q.get('need'):raise ValueError('identified follow-up required')
         if q.get('due'):date.fromisoformat(q['due'])
@@ -275,4 +290,4 @@ def validate_report(report,payload,task):
         raise ValueError('computed candidate required for complete valuation')
     if report['research_status']=='complete' and (not model or model.get('status')!='ready_for_review' or payload.get('coverage',{}).get('status')!='ready'):
         raise ValueError('partial model or coverage cannot claim complete research')
-    return report
+    return dict(report,logic_continuity=continuity)

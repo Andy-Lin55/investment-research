@@ -104,3 +104,29 @@ def test_historical_corpus_does_not_crowd_out_current_filing_and_latest_annual_b
     prompt=api().stage_prompt('model',p,task)
     assert '2025 complete annual table' in prompt and 'CURRENT full financial tables' in prompt
     assert len(prompt)<160000 and '2022 complete annual table' not in prompt
+
+
+def test_missing_prior_thesis_is_visible_as_not_reassessed_and_survives_next_state():
+    from research.workflow import build_next_state
+    from research.report_v17 import render
+    import json
+    previous={'holding_logic':[
+        {'id':'logic-a','claim':'上一版认为回款能跟上增长','falsifier':'连续两季落后','evidence':['old-doc']},
+        {'id':'logic-b','claim':'客户集中度可控','falsifier':'核心客户流失','evidence':['old-doc']}]}
+    task=plan_task(event(),resolve_profile(profile(),{}),previous,as_of='2026-11-02')
+    r=api().validate_report(report(),payload(),task)
+    compared={row['id']:row for row in r['logic_continuity']}
+    assert compared['logic-a']['previous_claim']=='上一版认为回款能跟上增长'
+    assert compared['logic-b']['status']=='not_reassessed'
+    assert '客户集中度可控' in json.dumps(render(task,{'report':r,'actual_model':'fixture','provider':'offline'},{}),ensure_ascii=False)
+    next_state=build_next_state(previous,r,manifest={'verified':True,'input_digest':'freeze','id':'report'})
+    assert {x['id']:x['claim'] for x in next_state['holding_logic']}=={'logic-a':'回报可持续','logic-b':'客户集中度可控'}
+    assert next_state['holding_logic'][1]['evidence']==['old-doc']
+
+
+def test_repeated_logic_identifier_cannot_hide_a_contradictory_assessment():
+    task=plan_task(event(),resolve_profile(profile(),{}),{},as_of='2026-11-02')
+    r=report()
+    r['holding_logic'].append(dict(r['holding_logic'][0],change='strengthened'))
+    with pytest.raises(ValueError,match='duplicate holding logic'):
+        api().validate_report(r,payload(),task)

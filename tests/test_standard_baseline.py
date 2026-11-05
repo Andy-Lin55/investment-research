@@ -200,3 +200,40 @@ def test_funding_or_negative_other_assets_suppress_valuation_in_model_report_and
     for n in ('Base','Bear'):
         assert load_workbook(BytesIO(raw),data_only=True)[n]['C44'].value in (None,'')
         assert 'C40=0' in load_workbook(BytesIO(raw))[n]['C44'].value
+
+
+@pytest.mark.parametrize('edit,ready',[
+    ({}, True),
+    ({'issuer_id':'other'},False),
+    ({'published_at':'2026-11-03'},False),
+    ({'period_end':'2024-12-31'},False),
+    ({'source_url':'https://elsewhere.invalid/annual.pdf'},False),
+    ({'block_edit':('375.00','374.00')},False),
+    ({'block_edit':('长期借款\n','长期借款\n1.00\n')},False),
+    ({'header_edit':('合并资产负债表','母公司资产负债表')},False),
+])
+def test_null_long_term_borrowing_only_resolves_from_consolidated_annual_subtotal(edit,ready):
+    from financials.forecast import digest
+    data=financial_data();row=data['statements']['balancesheet'][0]
+    row['values'].update(lt_borr=None,total_ncl=375.)
+    row['revision_id']=digest({k:v for k,v in row.items() if k!='revision_id'})
+    header='合并资产负债表\n2025年12月31日\n单位：元\n项目\n期末余额\n期初余额'
+    body=('项目\n期末余额\n期初余额\n非流动负债：\n长期借款\n应付债券\n50.00\n50.00\n'
+          '租赁负债\n25.00\n20.00\n其他非流动负债\n300.00\n290.00\n'
+          '非流动负债合计\n375.00\n360.00\n负债合计\n600.00\n595.00\n所有者权益：')
+    if 'block_edit' in edit:body=body.replace(*edit['block_edit'])
+    if 'header_edit' in edit:header=header.replace(*edit['header_edit'])
+    url=edit.get('source_url','https://static.cninfo.com.cn/finalpage/2026-04-01/12345.PDF')
+    document=dict(issuer_id=edit.get('issuer_id','issuer-a'),ticker='000001.SZ',document_type='年度报告',
+        period_end=edit.get('period_end','2025-12-31'),published_at=edit.get('published_at','2026-04-01'),
+        revision_id='a'*64,source={'url':url,'original':{'verified':True,'sha256':'a'*64}},
+        pages=[{'page':5,'text':header},{'page':6,'text':body}])
+    out=api().map_standard_baseline(data,resolve_profile(profile(),{}),as_of='2026-11-02',documents=[document])
+    assert row['values']['lt_borr'] is None  # leave the provider history intact
+    if not ready:
+        assert out['baseline'] is None and 'balancesheet.lt_borr' in out['gaps']
+    else:
+        assert out['baseline']['debt']==125.
+        term=next(t for t in out['lineage']['debt']['terms'] if t['field']=='lt_borr')
+        assert term['source_ref']==document['revision_id'] and term['source_page']==6
+        assert term['value_kind']=='reconciled_blank' and term['value']==0

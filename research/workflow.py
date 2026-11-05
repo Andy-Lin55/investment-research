@@ -65,8 +65,13 @@ def build_next_state(previous: dict, result: dict, *, manifest: dict) -> dict:
         if q.get('resolved') is not True:questions[q['id']]=deepcopy(q)
     state['open_questions']=list(questions.values())
     if 'source_revisions' in result:state['source_revisions']=deepcopy(result['source_revisions'])
-    for key in ('holding_logic','context_version'):
-        if key in result:state[key]=deepcopy(result[key])
+    if 'holding_logic' in result:
+        rejected=set(previous.get('rejected_hypothesis_ids',[]))
+        tracked={r['id']:deepcopy(r) for r in previous.get('holding_logic',[])
+                 if r.get('id') and r['id'] not in rejected}
+        tracked.update({r['id']:deepcopy(r) for r in result['holding_logic'] if r['id'] not in rejected})
+        state['holding_logic']=list(tracked.values())
+    if 'context_version' in result:state['context_version']=deepcopy(result['context_version'])
     state['last_published_research']=dict(manifest,review_status='unadopted')
     return state
 

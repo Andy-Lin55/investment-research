@@ -46,7 +46,18 @@ def render(task,result,files):
         block('paragraph','持有判断：'+r['thesis']),
         block('paragraph','研究覆盖：'+r['research_status']+'；AI研究候选／未人工采纳。正式模型和人工持有逻辑不自动改写。'),
         block('heading_2','持有逻辑与变化')]
-    blocks.append(table(['逻辑','变化与依据','证伪条件'],[[x['claim'],x['change']+'：'+x['reason'],x['falsifier']] for x in r['holding_logic']]))
+    continuity={x['id']:x for x in r.get('logic_continuity',[])}
+    logic=[]
+    for row in r['holding_logic']:
+        previous=continuity.get(row['id'],{})
+        label={'strengthened':'增强','unchanged':'维持','weakened':'减弱'}.get(row['change'],row['change'])
+        if previous.get('status')=='new_candidate':label='首次记录'
+        old=previous.get('previous_claim') or '—'
+        logic.append([row['claim'],old,label+'：'+row['reason'],row['falsifier']])
+    logic.extend([['本次未复核',row['previous_claim'],'沿用上一版记录，尚无本次判断',row.get('previous_falsifier') or '—']
+        for row in continuity.values() if row['status']=='not_reassessed'])
+    for offset in range(0,len(logic),30):
+        blocks.append(table(['本次逻辑','上次记录','变化与依据','证伪条件'],logic[offset:offset+30]))
     blocks.extend([block('heading_2','核心分歧与自己的判断'),block('paragraph',r['key_disagreement']),
         table(['指标／期间','差异解释／缺口','可比状态'],[[x['metric'],x['reason'],x['status']] for x in r['earnings_differences']])])
     price=result.get('market_snapshot')

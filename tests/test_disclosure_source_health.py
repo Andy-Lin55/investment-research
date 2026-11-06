@@ -112,6 +112,7 @@ def test_a_share_router_honors_strict_source_health(monkeypatch):
     from data_ingestion import filings_router, cninfo_fetcher
 
     monkeypatch.setattr(cninfo_fetcher, "REQUEST_INTERVAL_SECONDS", 0)
+    monkeypatch.setattr(cninfo_fetcher.time, "sleep", lambda _: None)
     monkeypatch.setattr(cninfo_fetcher.requests, "post", Mock(side_effect=requests.Timeout("offline")))
     with pytest.raises(SourceFetchError):
         filings_router.fetch_filings("002475.SZ", strict=True)
@@ -153,3 +154,44 @@ def test_hk_timeout_retries_one_request_before_marking_a_gap(monkeypatch):
     assert hk.fetch_hk_filings("1658.HK", health=health, strict=True) == []
     assert health.successful_requests == 2
     assert [call.kwargs["params"]["lang"] for call in network.call_args_list] == ["en", "en", "zh"]
+
+
+def test_cninfo_retries_only_the_failed_page_without_losing_coverage(monkeypatch):
+    import requests
+    from data_ingestion import cninfo_fetcher
+    from data_ingestion.disclosure_health import SourceHealth
+
+    monkeypatch.setattr(cninfo_fetcher.time, "sleep", lambda _: None)
+    error = requests.Response()
+    error.status_code = 502
+    first = Mock()
+    first.json.return_value = {"announcements": [{"announcementId": "1", "secCode": "other"}], "hasMore": True}
+    second = Mock()
+    second.json.return_value = {"announcements": [{"announcementId": "2", "secCode": "other"}], "hasMore": False}
+    post = Mock(side_effect=[first, error, second])
+    monkeypatch.setattr(cninfo_fetcher.requests, "post", post)
+    health = SourceHealth("CNINFO", "601318.SH")
+
+    assert cninfo_fetcher.fetch_announcements("601318.SH", keywords=["业绩预告"],
+                                             download_pdf=False, health=health, strict=True) == []
+    assert [call.kwargs["data"]["pageNum"] for call in post.call_args_list] == [1, 2, 2]
+    assert health.status == "complete" and health.successful_requests == 2
+    assert health.requests[1]["attempts"] == 2
+
+
+def test_cninfo_keeps_a_terminal_http_error_visible_without_retrying(monkeypatch):
+    import requests
+    from data_ingestion import cninfo_fetcher
+    from data_ingestion.disclosure_health import SourceHealth
+
+    monkeypatch.setattr(cninfo_fetcher.time, "sleep", lambda _: None)
+    response = requests.Response()
+    response.status_code = 403
+    post = Mock(return_value=response)
+    monkeypatch.setattr(cninfo_fetcher.requests, "post", post)
+    health = SourceHealth("CNINFO", "601318.SH")
+
+    cninfo_fetcher.fetch_announcements("601318.SH", keywords=["业绩预告"], download_pdf=False, health=health)
+    assert health.status == "error"
+    assert health.errors[0]["http_status"] == 403
+    assert post.call_count == 1

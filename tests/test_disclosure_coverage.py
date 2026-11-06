@@ -21,6 +21,7 @@ def ann(identifier, day="2026-10-29", code="002475"):
 def source(monkeypatch):
     monkeypatch.setattr(cninfo, "beijing_date", lambda: datetime(2026, 11, 2).date())
     monkeypatch.setattr(cninfo, "REQUEST_INTERVAL_SECONDS", 0)
+    monkeypatch.setattr(cninfo.time, "sleep", lambda _: None)
     post = Mock()
     monkeypatch.setattr(cninfo.requests, "post", post)
     return post

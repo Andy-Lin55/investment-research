@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from urllib.parse import urljoin, urlparse
 
@@ -126,7 +127,7 @@ _ANALYSIS_REQUIREMENTS = """你是投资研究员，逐项解析公司第一手�
 股东会/董事会：区分会议通知、提案与已通过决议，逐项解释重要议案、表决结果、分红回购、董监高变动、融资/关联交易、实施时间及股东影响。
 其他重大公告：说明发生了什么，交易对象、金额/比例、关键条款、生效条件、审批/执行进度、对经营财务和股东权益的影响。
 不适用的项目不要硬填，不要编造预期差、行情或买卖建议。保留货币、单位、期间和比较口径。
-严格返回 JSON 对象：
+只返回一个有效的 JSON 对象，不输出思考过程或额外说明。字符串内部使用中文引号，换行必须转义。
 {"facts": ["实质性事实或决议，不能只有公告标题"], "key_numbers": {"含期间和单位的指标": "数值及同比"}, "interpretation": "逐项说明变化原因、经营/治理/财务影响与风险，资料充分时充分展开，不设字数上限", "follow_up": ["具体待验证事项或后续日期"], "missing": ["需要但原文未披露的资料"]}
 """
 
@@ -135,7 +136,16 @@ def _decode_analysis(raw: str) -> dict:
     start = raw.find("{")
     if start < 0:
         raise ValueError("未返回结构化分析")
-    result, _ = json.JSONDecoder().raw_decode(raw[start:])
+    payload = raw[start:]
+    try:
+        result, _ = json.JSONDecoder().raw_decode(payload)
+    except json.JSONDecodeError as error:
+        # Some Gemini responses put literal newlines/tabs inside quoted strings.
+        # Preserve the text, but never guess at missing quotes, braces or fields.
+        if (error.msg != "Invalid control character at"
+                or re.search(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", payload)):
+            raise
+        result, _ = json.JSONDecoder(strict=False).raw_decode(payload)
     if not isinstance(result, dict):
         raise ValueError("分析不是对象")
     facts = result.get("facts")
@@ -166,7 +176,10 @@ def analyze_disclosure(page: dict, *, read_sources=None, call_ai=None) -> Disclo
     if read_sources is None:
         read_sources = read_disclosure_sources
     if call_ai is None:
-        from data_ingestion.ai_client import call_ai
+        from data_ingestion.ai_client import call_ai as request_ai
+
+        def call_ai(prompt, *, timeout):
+            return request_ai(prompt, timeout=timeout, validate=_decode_analysis)
 
     props = page.get("properties", {})
     url = props.get("SourceURL", {}).get("url") or ""

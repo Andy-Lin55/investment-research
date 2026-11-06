@@ -189,3 +189,71 @@ def test_cninfo_disclosure_date_uses_beijing_even_under_utc():
     from data_ingestion.cninfo_fetcher import _ts_to_date
 
     assert _ts_to_date(1792512000000) == "2026-10-21"
+
+
+@pytest.mark.parametrize("broken", [
+    '{"facts": ["没有结束的 JSON',
+    '{"title": "发布了季报"}',
+])
+def test_disclosure_retries_unusable_primary_response_via_configured_fallback(monkeypatch, broken):
+    from data_ingestion import ai_client
+    monkeypatch.setattr(ai_client, "CODEX_SUBSCRIPTION_ENABLED", False)
+    monkeypatch.setattr(ai_client, "DMXAPI_KEY", "primary-test")
+    monkeypatch.setattr(ai_client, "GEMINI_API_KEY", "fallback-test")
+    provider = Mock(side_effect=[broken, analysis_json("已通过原文确认单季营收")])
+    monkeypatch.setattr(ai_client, "_call_api", provider)
+    result = analyze_disclosure(event(), read_sources=lambda url: ([(url, "原文")], []))
+    assert result.status == "complete"
+    assert "已通过原文确认单季营收" in result.body
+    assert [call.kwargs["api_key"] for call in provider.call_args_list] == ["primary-test", "fallback-test"]
+
+
+def test_plain_text_call_keeps_its_existing_provider_behavior(monkeypatch):
+    from data_ingestion import ai_client
+    monkeypatch.setattr(ai_client, "CODEX_SUBSCRIPTION_ENABLED", False)
+    monkeypatch.setattr(ai_client, "DMXAPI_KEY", "primary-test")
+    monkeypatch.setattr(ai_client, "GEMINI_API_KEY", "fallback-test")
+    provider = Mock(return_value="每日简报正文，不要求 JSON")
+    monkeypatch.setattr(ai_client, "_call_api", provider)
+    assert ai_client.call_ai("写简报") == "每日简报正文，不要求 JSON"
+    assert provider.call_count == 1
+
+
+def test_literal_line_breaks_inside_json_strings_do_not_discard_valid_analysis(monkeypatch):
+    from data_ingestion import ai_client
+    monkeypatch.setattr(ai_client, "CODEX_SUBSCRIPTION_ENABLED", False)
+    monkeypatch.setattr(ai_client, "DMXAPI_KEY", "primary-test")
+    monkeypatch.setattr(ai_client, "GEMINI_API_KEY", "fallback-test")
+    raw = analysis_json(interpretation="第一行\n第二行\t补充说明").replace(r"\n", "\n").replace(r"\t", "\t")
+    provider = Mock(return_value=raw)
+    monkeypatch.setattr(ai_client, "_call_api", provider)
+    result = analyze_disclosure(event(), read_sources=lambda url: ([(url, "原文")], []))
+    assert result.status == "complete"
+    assert "第一行\n第二行\t补充说明" in result.body
+    assert provider.call_count == 1
+
+
+def test_whitespace_on_required_field_names_is_recovered_without_guessing_fields():
+    from data_ingestion.disclosure_analysis import _decode_analysis
+    raw = analysis_json().replace('"facts"', '"facts\n"')
+    assert _decode_analysis(raw)["facts"] == ["单季营收增长5%"]
+
+
+def test_conflicting_aliases_are_not_silently_overwritten():
+    from data_ingestion.disclosure_analysis import _decode_analysis
+    raw = analysis_json().replace('"facts":', '"facts ": ["冲突事实"], "facts":')
+    with pytest.raises(ValueError, match="重复分析字段"):
+        _decode_analysis(raw)
+
+
+def test_disclosure_requests_json_mode_only_from_verified_primary_endpoint(monkeypatch):
+    from data_ingestion import ai_client
+    monkeypatch.setattr(ai_client, "CODEX_SUBSCRIPTION_ENABLED", False)
+    monkeypatch.setattr(ai_client, "DMXAPI_KEY", "primary-test")
+    monkeypatch.setattr(ai_client, "GEMINI_API_KEY", "fallback-test")
+    provider = Mock(side_effect=["bad response", analysis_json()])
+    monkeypatch.setattr(ai_client, "_call_api", provider)
+    assert analyze_disclosure(event(), read_sources=lambda url: ([(url, "原文")], [])).status == "complete"
+    primary, fallback = provider.call_args_list
+    assert primary.kwargs["json_object"] is True
+    assert not fallback.kwargs.get("json_object")

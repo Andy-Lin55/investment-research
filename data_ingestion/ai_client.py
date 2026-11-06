@@ -15,12 +15,14 @@ from config.settings import (
 )
 
 
-def _call_api(prompt: str, *, api_key: str, base_url: str, model: str, timeout: int) -> str:
+def _call_api(prompt: str, *, api_key: str, base_url: str, model: str, timeout: int,
+              json_object: bool = False) -> str:
     from openai import OpenAI
 
     client = OpenAI(api_key=api_key, base_url=base_url, max_retries=0)
+    options = {"response_format": {"type": "json_object"}} if json_object else {}
     response = client.chat.completions.create(
-        model=model, messages=[{"role": "user", "content": prompt}], timeout=timeout,
+        model=model, messages=[{"role": "user", "content": prompt}], timeout=timeout, **options,
     )
     return (response.choices[0].message.content or "").strip()
 
@@ -60,7 +62,7 @@ def call_ai(prompt: str, timeout: int = 60, *, validate: Callable[[str], object]
         try:
             content = _call_api(
                 prompt, api_key=DMXAPI_KEY, base_url=DMXAPI_BASE_URL,
-                model=DMXAPI_MODEL, timeout=min(timeout, 120),
+                model=DMXAPI_MODEL, timeout=min(timeout, 120), json_object=validate is not None,
             )
             if _usable(content, "DMXAPI", validate):
                 return content

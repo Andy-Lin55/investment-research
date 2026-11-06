@@ -244,3 +244,16 @@ def test_conflicting_aliases_are_not_silently_overwritten():
     raw = analysis_json().replace('"facts":', '"facts ": ["冲突事实"], "facts":')
     with pytest.raises(ValueError, match="重复分析字段"):
         _decode_analysis(raw)
+
+
+def test_disclosure_requests_json_mode_only_from_verified_primary_endpoint(monkeypatch):
+    from data_ingestion import ai_client
+    monkeypatch.setattr(ai_client, "CODEX_SUBSCRIPTION_ENABLED", False)
+    monkeypatch.setattr(ai_client, "DMXAPI_KEY", "primary-test")
+    monkeypatch.setattr(ai_client, "GEMINI_API_KEY", "fallback-test")
+    provider = Mock(side_effect=["bad response", analysis_json()])
+    monkeypatch.setattr(ai_client, "_call_api", provider)
+    assert analyze_disclosure(event(), read_sources=lambda url: ([(url, "原文")], [])).status == "complete"
+    primary, fallback = provider.call_args_list
+    assert primary.kwargs["json_object"] is True
+    assert not fallback.kwargs.get("json_object")

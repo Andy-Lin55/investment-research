@@ -211,6 +211,7 @@ def test_failed_source_cannot_finish_daily_job_green(daily, monkeypatch):
     monkeypatch.setattr(jobs, "batch_fetch", cninfo_fetcher.batch_fetch)
     monkeypatch.setattr(jobs, "fetch_periodic_reports", cninfo_fetcher.fetch_periodic_reports)
     monkeypatch.setattr(cninfo_fetcher, "REQUEST_INTERVAL_SECONDS", 0)
+    monkeypatch.setattr(cninfo_fetcher.time, "sleep", lambda _: None)
     monkeypatch.setattr(cninfo_fetcher.requests, "post", Mock(side_effect=requests.ConnectionError("offline")))
 
     with pytest.raises(RuntimeError):

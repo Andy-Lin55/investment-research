@@ -22,7 +22,7 @@ from config.settings import (
     REQUEST_INTERVAL_SECONDS,
 )
 
-_CNINFO_QUERY = "http://www.cninfo.com.cn/new/hisAnnouncement/query"
+_CNINFO_QUERY = "https://www.cninfo.com.cn/new/hisAnnouncement/query"
 _CNINFO_PDF_BASE = "http://static.cninfo.com.cn/"
 
 _HEADERS = {
@@ -32,7 +32,7 @@ _HEADERS = {
         "Chrome/120.0.0.0 Safari/537.36"
     ),
     "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-    "Referer": "http://www.cninfo.com.cn/",
+    "Referer": "https://www.cninfo.com.cn/",
     "X-Requested-With": "XMLHttpRequest",
 }
 
@@ -73,6 +73,32 @@ def _download_pdf(pdf_url: str, save_path: Path) -> bool:
             else:
                 logger.error(f"PDF 下载失败（已重试3次），放弃 [{pdf_url}]: {e}")
     return False
+
+
+def _post_query_page(form: dict, record: dict) -> requests.Response:
+    """Repeat a transient read of the same page without restarting pagination."""
+    for attempt in range(1, 4):
+        record["attempts"] = attempt
+        try:
+            response = requests.post(_CNINFO_QUERY, headers=_HEADERS, data=form, timeout=15)
+            response.raise_for_status()
+            return response
+        except (requests.Timeout, requests.ConnectionError, requests.HTTPError) as error:
+            response = getattr(error, "response", None)
+            status = response.status_code if response is not None else None
+            if attempt == 3 or (isinstance(error, requests.HTTPError)
+                                and status not in {429, 500, 502, 503, 504}):
+                raise
+            delay = max(REQUEST_INTERVAL_SECONDS, 2 ** attempt)
+            retry_after = response.headers.get("Retry-After", "") if response is not None else ""
+            if retry_after:
+                # Avoid retrying earlier than requested or blocking the daily job indefinitely.
+                if not retry_after.isdecimal() or int(retry_after) > 10:
+                    raise
+                delay = max(delay, int(retry_after))
+            logger.warning(f"CNINFO 查询重试：第 {form['pageNum']} 页，"
+                           f"{status or type(error).__name__}，等待 {delay}s")
+            time.sleep(delay)
 
 
 def fetch_announcements(
@@ -122,13 +148,11 @@ def fetch_announcements(
             record = {"searchkey": searchkey, "page": page, "window": f"{start_date}~{end_date}"}
             health.requests.append(record)
             time.sleep(REQUEST_INTERVAL_SECONDS)
-            resp = requests.post(
-                _CNINFO_QUERY, headers=_HEADERS,
-                data={"pageNum": page, "pageSize": 20, "tabName": "fulltext",
-                      "searchkey": searchkey, "seDate": record["window"]}, timeout=15,
+            response = _post_query_page(
+                {"pageNum": page, "pageSize": 20, "tabName": "fulltext",
+                 "searchkey": searchkey, "seDate": record["window"]}, record,
             )
-            resp.raise_for_status()
-            data = resp.json()
+            data = response.json()
             if not isinstance(data, dict) or "announcements" not in data:
                 raise ValueError("CNINFO missing announcements")
             rows = data["announcements"] if data["announcements"] is not None else []
@@ -203,7 +227,9 @@ def fetch_announcements(
                             health.fail("announcement_row", e)
             except Exception as e:
                 health.fail(searchkey, e)
-                logger.error(f"CNINFO 抓取不完整 [{ticker}] kw={kw}: {type(e).__name__}")
+                failure = health.errors[-1]
+                status = f" HTTP {failure['http_status']}" if "http_status" in failure else ""
+                logger.error(f"CNINFO 抓取不完整 [{ticker}] kw={kw}: {type(e).__name__}{status}")
 
     logger.info(f"[{ticker}] 共抓取到 {len(results)} 条公告")
     health.finish(len(results), strict)

@@ -231,3 +231,16 @@ def test_literal_line_breaks_inside_json_strings_do_not_discard_valid_analysis(m
     assert result.status == "complete"
     assert "第一行\n第二行\t补充说明" in result.body
     assert provider.call_count == 1
+
+
+def test_whitespace_on_required_field_names_is_recovered_without_guessing_fields():
+    from data_ingestion.disclosure_analysis import _decode_analysis
+    raw = analysis_json().replace('"facts"', '"facts\n"')
+    assert _decode_analysis(raw)["facts"] == ["单季营收增长5%"]
+
+
+def test_conflicting_aliases_are_not_silently_overwritten():
+    from data_ingestion.disclosure_analysis import _decode_analysis
+    raw = analysis_json().replace('"facts":', '"facts ": ["冲突事实"], "facts":')
+    with pytest.raises(ValueError, match="重复分析字段"):
+        _decode_analysis(raw)

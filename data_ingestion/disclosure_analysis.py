@@ -132,22 +132,40 @@ _ANALYSIS_REQUIREMENTS = """你是投资研究员，逐项解析公司第一手�
 """
 
 
+_ANALYSIS_FIELDS = frozenset({"facts", "key_numbers", "interpretation", "follow_up", "missing"})
+
+
+def _unique_object(pairs):
+    result = dict(pairs)
+    if len(result) != len(pairs):
+        raise ValueError("重复分析字段")
+    return result
+
+
 def _decode_analysis(raw: str) -> dict:
     start = raw.find("{")
     if start < 0:
         raise ValueError("未返回结构化分析")
     payload = raw[start:]
     try:
-        result, _ = json.JSONDecoder().raw_decode(payload)
+        result, _ = json.JSONDecoder(object_pairs_hook=_unique_object).raw_decode(payload)
     except json.JSONDecodeError as error:
         # Some Gemini responses put literal newlines/tabs inside quoted strings.
         # Preserve the text, but never guess at missing quotes, braces or fields.
         if (error.msg != "Invalid control character at"
                 or re.search(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", payload)):
             raise
-        result, _ = json.JSONDecoder(strict=False).raw_decode(payload)
+        result, _ = json.JSONDecoder(strict=False, object_pairs_hook=_unique_object).raw_decode(payload)
     if not isinstance(result, dict):
         raise ValueError("分析不是对象")
+    normalized = {}
+    for key, value in result.items():
+        stripped = key.strip(" \t\r\n")
+        field = stripped if stripped in _ANALYSIS_FIELDS else key
+        if field in normalized:
+            raise ValueError("重复分析字段")
+        normalized[field] = value
+    result = normalized
     facts = result.get("facts")
     if not isinstance(facts, list) or not facts or not all(isinstance(item, str) and item.strip() for item in facts):
         raise ValueError("缺少实质性事实")

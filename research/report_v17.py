@@ -44,8 +44,26 @@ def render(task,result,files):
     r=result['report'];blocks=[block('heading_1',task['ticker']+'｜AI研究更新'),
         block('quote',r['conclusion']),block('paragraph','核心问题：'+r['research_question']),
         block('paragraph','持有判断：'+r['thesis']),
-        block('paragraph','研究覆盖：'+r['research_status']+'；AI研究候选／未人工采纳。正式模型和人工持有逻辑不自动改写。'),
-        block('heading_2','持有逻辑与变化')]
+        block('paragraph','研究覆盖：'+r['research_status']+'；AI研究候选／未人工采纳。正式模型和人工持有逻辑不自动改写。')]
+    view=r.get('investment_view')
+    if view:
+        reversal=view['reversal']
+        summary=block('paragraph','\n'.join([
+            '主解释｜'+view['preferred_explanation'],
+            '备选解释｜'+view['alternative_explanation'],
+            '判断依据｜'+view['why_preferred'],
+            '模型影响｜'+view['model_implication'],
+            '反转条件｜'+reversal['condition']+' '+reversal['action']+'（复核 '+reversal['due']+'）',
+        ]))
+        sources={source['revision_id']:source for source in result.get('source_index',[])}
+        links=summary['paragraph']['rich_text']
+        links.extend(rich('\n依据 '))
+        for index,ref in enumerate(dict.fromkeys(view['evidence'])):
+            if index:links.extend(rich(' · '))
+            source=sources.get(ref,{})
+            links.extend(rich(source.get('document_id') or ref[:12],url=source.get('url')))
+        blocks.append(summary)
+    blocks.append(block('heading_2','持有逻辑与变化'))
     continuity={x['id']:x for x in r.get('logic_continuity',[])}
     logic=[]
     for row in r['holding_logic']:

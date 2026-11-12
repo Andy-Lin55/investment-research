@@ -38,7 +38,9 @@ def test_discovery_to_research_uses_real_model_and_publication_readback_then_res
             a=assumptions()
             for row in a:row['source_refs']=['doc-a']
             return {'facts':f,'guidance':[],'broker_estimates':[],'assumptions':a}
-        if stage=='judgment':return {'data_requests':[]}
+        if stage=='judgment':
+            from tests.test_research_report_contract import investment_view
+            return {'data_requests':[],'investment_view':investment_view(payload)}
         return report()
     class Reports:
         def publish(self,task,result,files,**kw):

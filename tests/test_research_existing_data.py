@@ -170,7 +170,9 @@ def test_provider_history_reaches_prompt_and_native_report_even_without_forecast
         if stage=='model':
             assert '14.25' in stage_prompt(stage,payload,task)
             return {'facts':[],'guidance':[],'broker_estimates':[],'assumptions':[]}
-        if stage=='judgment':return {'data_requests':[]}
+        if stage=='judgment':
+            from tests.test_research_report_contract import investment_view
+            return {'data_requests':[],'investment_view':investment_view(payload)}
         return report()
     class Reports:
         def publish(self,task,result,files,**kw):

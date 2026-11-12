@@ -21,6 +21,28 @@ REPORT_SCHEMA=dict(research_question='原公司核心问题',research_status='co
     open_questions=['未解问题'],questions=[dict(id='稳定问题ID',need='待验证事项',due='YYYY-MM-DD')],data_requests=[])
 
 
+INVESTMENT_VIEW_SCHEMA = dict(
+    position='一句话写清目前倾向及对持有判断的影响，点出最决定性的因素',
+    preferred_explanation='对最新经营变化最可能的解释，明确这是研究判断',
+    alternative_explanation='一个真正能挑战主解释的竞争解释',
+    why_preferred='哪条证据能区分两种解释，为什么它更支持主解释，以及仍未知什么',
+    model_implication='明确该判断改变或维持哪项模型假设及方向，缺数据可写条件式',
+    reversal=dict(condition='哪项可核验的指标或新披露会推翻判断',
+                  action='届时改变哪项研究判断或模型假设',due='YYYY-MM-DD'),
+    evidence=['已读的原文或实际数据 revision_id，可另附程序计算的 model_version'],
+)
+
+INVESTMENT_VIEW_INSTRUCTION = (
+    '先作判断再写资料。围绕核心问题只挑最能改变判断的一个分歧。给出目前更可信的解释，'
+    '提出最强的替代解释，并指出一条能区分两者的现有证据。若证据还不能区分，明确写出目前倾向是暂定的，'
+    '以及哪项尚未披露的数据会让两种解释得出不同结果。'
+    'model_implication 要写具体驱动、调整方向和理由，例如是否调整应收周转天数、利润率或预测节奏。'
+    '有程序复算的差额就用它解释取舍。没有可靠数值就给条件式方向，不编造门槛。'
+    'reversal 必须给出一个最关键的可观察条件、满足后具体改什么和一个复核日期。'
+    '不要用“仍需跟踪”或罗列所有不确定性代替观点。'
+)
+
+
 def compact_material(payload,task):
     """Whole financial pages are atomic; omitted material stays explicitly indexed."""
     out=deepcopy(payload);coverage=out.get('coverage',{})
@@ -124,9 +146,9 @@ def stage_prompt(stage,payload,task):
             guidance=[],assumptions=[dict(scenario='base/bull/bear',year='财年整数',
             field='financials.forecast.DRIVERS 中的字段',value='有限数值',kind='research_assumption',
             rationale='为何这样假设，与指引/同行的差异及风险',range=['下界','上界'],source_refs=['原文revision_id'])]),
-        'judgment':dict(holding_logic=REPORT_SCHEMA['holding_logic'],key_disagreement='独立判断与替代解释',
+        'judgment':dict(investment_view=INVESTMENT_VIEW_SCHEMA,holding_logic=REPORT_SCHEMA['holding_logic'],key_disagreement='独立判断与替代解释',
             data_requests=[dict(kind='primary_disclosure',need='具体缺口',why='如何改变核心问题判断')]),
-        'report':REPORT_SCHEMA}
+        'report':dict(REPORT_SCHEMA)}
     material=dict(contract_version=CONTRACT_VERSION,stage=stage,issuer_id=task['issuer_id'],
         question=task['profile']['research_question'],forecast_years=forecast_years(task['profile'],task['updated_at'] if 'updated_at' in task else task['created_at'][:10]),
         baseline_fields=list(BASE_FIELDS),driver_fields=list(DRIVERS),schema=schemas[stage],materials=compact_material(payload,task),rejected_hypotheses=task['previous_state'].get('rejected_hypothesis_ids',[]),
@@ -134,8 +156,15 @@ def stage_prompt(stage,payload,task):
     if stage=='judgment':
         material['data_request_kinds']=sorted(REQUEST_KINDS)
         material['request_instruction']='data_requests[].kind必须逐字使用data_request_kinds中的英文值；不得用中文改写；没有请求则返回空数组。'
+    if stage=='judgment':
+        material['investment_view_instruction']=INVESTMENT_VIEW_INSTRUCTION
     if stage=='report':
         material['request_instruction']='报告阶段data_requests必须为空数组；未解决的请求只放open_questions及questions，勿声称已经完成。'
+        if payload.get('judgment',{}).get('investment_view') is not None:
+            material['investment_view_instruction']='沿用 judgment.investment_view 的主判断、依据及反转条件。正文展开证据和模型影响，勿把主判断改写为通用风险提示。'
+        else:
+            material['schema']['investment_view']=INVESTMENT_VIEW_SCHEMA
+            material['investment_view_instruction']=INVESTMENT_VIEW_INSTRUCTION
     if stage=='model':
         from research.existing_data import FIELDS
         material['historical_statement_fields']={kind:[field for field,_ in fields] for kind,fields in FIELDS.items()}
@@ -194,6 +223,32 @@ def evidence_ids(payload):
     model=payload.get('model',{}).get('model')
     if model and model.get('model_version'):result.add(model['model_version'])
     return result
+
+
+def validate_investment_view(view, payload):
+    """Require a distinct competing explanation and a traceable decision."""
+    text_fields = ('position', 'preferred_explanation', 'alternative_explanation',
+                   'why_preferred', 'model_implication')
+    if not isinstance(view, dict) or any(
+        not isinstance(view.get(key), str) or not view[key].strip() for key in text_fields
+    ):
+        raise ValueError('investment view requires a position, competing explanations and model implication')
+    if view['preferred_explanation'].strip() == view['alternative_explanation'].strip():
+        raise ValueError('investment view requires distinct explanations')
+    reversal = view.get('reversal')
+    if not isinstance(reversal, dict) or any(
+        not isinstance(reversal.get(key), str) or not reversal[key].strip()
+        for key in ('condition', 'action', 'due')
+    ):
+        raise ValueError('investment view requires an observable reversal condition and action')
+    date.fromisoformat(reversal['due'])
+    refs = view.get('evidence')
+    allowed = evidence_ids(payload)
+    model_version = (payload.get('model', {}).get('model') or {}).get('model_version')
+    if (not isinstance(refs, list) or not refs or any(not isinstance(ref, str) for ref in refs)
+            or not set(refs) <= allowed or not set(refs) - {model_version}):
+        raise ValueError('investment view requires evidence from an admitted source')
+    return deepcopy(view)
 
 
 def validate_requests(items):
@@ -269,7 +324,8 @@ def validate_report(report,payload,task):
     if report['data_requests']:raise ValueError('final writer cannot pretend unexecuted retrieval is completed')
     model=payload.get('model',{}).get('model')
     # Check explicit numeric price conclusions as well as status labels.
-    text=' '.join(report.get(k,'') for k in ('conclusion','thesis','valuation_reason'))
+    text=' '.join([*(report.get(k,'') for k in ('conclusion','thesis','valuation_reason')),
+                   report.get('investment_view',{}).get('model_implication','')])
     targets=[float(v) for v in re.findall(r'(?:目标价|每股估值|合理股价)\s*(?:为|约|[:：]|是)*\s*([0-9]+(?:\.[0-9]+)?)',text)]
     returns=re.findall(r'(上涨空间|上行空间|下跌空间|下行空间)\s*(?:为|约|[:：]|是)*\s*([-+]?[0-9]+(?:\.[0-9]+)?)\s*[%％]',text)
     if targets or returns:

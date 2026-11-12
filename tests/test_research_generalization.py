@@ -121,7 +121,9 @@ def test_different_company_and_year_complete_through_real_durable_adapters_after
     def infer(stage,payload,t):
         calls.append(stage)
         if stage=='model':return {'facts':f,'assumptions':a,'guidance':[],'broker_estimates':[]}
-        if stage=='judgment':return {'data_requests':[]}
+        if stage=='judgment':
+            from tests.test_research_report_contract import investment_view
+            return {'data_requests':[],'investment_view':investment_view(payload)}
         r=report()
         for key in ('holding_logic','earnings_differences','changes','counterevidence','next_actions'):
             for item in r[key]:item['evidence']=['source-'+issuer]

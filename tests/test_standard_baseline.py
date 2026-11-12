@@ -146,7 +146,9 @@ def test_live_stage_adapter_uses_mapped_baseline_and_compact_cases_and_publishes
             scenarios=standard_scenarios()
             cases={f:dict(rationale='explicit synthetic',source_refs=['doc-a'],cases={n:{str(r['year']):dict(value=r['values'][f],range=[r['values'][f],r['values'][f]]) for r in rows} for n,rows in scenarios.items()}) for f in scenarios['base'][0]['values']}
             return dict(facts=[],guidance=[],broker_estimates=[],driver_cases=cases)
-        if stage=='judgment':return {'data_requests':[]}
+        if stage=='judgment':
+            from tests.test_research_report_contract import investment_view
+            return {'data_requests':[],'investment_view':investment_view(payload)}
         return report()
     class Reports:
         def publish(self,t,result,files,**kw):

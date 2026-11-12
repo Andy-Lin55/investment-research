@@ -8,7 +8,7 @@ from financials.forecast import digest,number
 from research.runtime import Budget,BudgetBlocked
 from research.delivery import ServiceError
 from research.workflow import StageWait,advance_task,company_state,control,plan_task
-from research.contract_v17 import stage_prompt,validate_report,validate_requests,evidence_ids,defer_writer_requests
+from research.contract_v17 import stage_prompt,validate_report,validate_requests,evidence_ids,defer_writer_requests,validate_investment_view
 
 
 def encoded(value):return json.dumps(value,ensure_ascii=False,sort_keys=True,allow_nan=False).encode()
@@ -166,9 +166,22 @@ def build_adapters(*,store,drive,reports,env,documents,reasoner=None,baseline=No
         candidate['issuer_id']=task['issuer_id'];return candidate
     def judgment(payload,task):
         result=infer('judgment',payload,task);validate_requests(result.get('data_requests',[]))
-        return dict(result,issuer_id=task['issuer_id'],status='ready')
+        try:
+            view=validate_investment_view(result.get('investment_view'),payload)
+        except ValueError as error:
+            raise StageWait('quality_blocked',[str(error)]) from error
+        return dict(result,investment_view=view,issuer_id=task['issuer_id'],status='ready')
     def report(payload,task):
-        r=validate_report(defer_writer_requests(infer('report',payload,task)),payload,task)
+        draft=defer_writer_requests(infer('report',payload,task))
+        # Existing checkpoints may predate the investment-view field.
+        view=payload.get('judgment',{}).get('investment_view')
+        if view is None:view=draft.get('investment_view')
+        try:
+            view=validate_investment_view(view,payload)
+        except ValueError as error:
+            raise StageWait('quality_blocked',[str(error)]) from error
+        draft.update(investment_view=view,conclusion=view['position'])
+        r=validate_report(draft,payload,task)
         if task.get('unresolved_data_requests'):r['research_status']='partial'
         return dict(r,issuer_id=task['issuer_id'],status='ready')
     def baseline_check(task):

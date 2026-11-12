@@ -130,3 +130,54 @@ def test_repeated_logic_identifier_cannot_hide_a_contradictory_assessment():
     r['holding_logic'].append(dict(r['holding_logic'][0],change='strengthened'))
     with pytest.raises(ValueError,match='duplicate holding logic'):
         api().validate_report(r,payload(),task)
+
+
+def investment_view(payload, *, ref=None):
+    model=(payload.get("model",{}).get("model") or {}).get("model_version")
+    refs=api().evidence_ids(payload)-{model}
+    return dict(position='需求修复尚不足以支持上调盈利判断，先以回款为约束。',
+        preferred_explanation='新客户进入交付阶段，收入恢复早于现金兑现。',
+        alternative_explanation='低基数足以解释收入恢复，新增客户尚未产生显著增量。',
+        why_preferred='公司明确披露量产，但应收和经营现金流尚未同步改善。',
+        model_implication='保留基准收入路径，下一季回款前不缩短应收周转天数。',
+        reversal=dict(condition='下一期披露确认客户交付增长且应收周转天数下降。',
+                      action='上调现金转换假设并复核估值。',due='2026-11-30'),
+        evidence=[ref if ref else sorted(refs)[0]])
+
+
+def test_research_stage_rejects_summary_without_investment_view():
+    from research.v17 import build_adapters
+    from research.workflow import StageWait
+    t=plan_task(event(),resolve_profile(profile(),{}),{},as_of='2026-11-02')
+    adapters=build_adapters(store=MemoryStore(),drive=None,reports=None,env={},
+        documents=lambda task:[],reasoner=lambda *args:{'data_requests':[]})
+    with pytest.raises(StageWait,match='quality_blocked'):
+        adapters['judgment'](payload(),t)
+
+
+def test_report_keeps_the_validated_judgment_even_when_writer_rephrases_it():
+    from research.v17 import build_adapters
+    from research.report_v17 import render
+    t=plan_task(event(),resolve_profile(profile(),{}),{},as_of='2026-11-02')
+    p=payload()
+    view=investment_view(p)
+    p['judgment']={'investment_view':view}
+    draft=dict(report(),investment_view=dict(view,position='公司发布了公告。'))
+    adapters=build_adapters(store=MemoryStore(),drive=None,reports=None,env={},
+        documents=lambda task:[],reasoner=lambda *args:draft)
+    r=adapters['report'](p,t)
+    assert r['investment_view']==view and r['conclusion']==view['position']
+    blocks=render(t,{'report':r,'actual_model':'fixture','provider':'offline'}, {})
+    assert view['why_preferred'] in str(blocks[:9])
+    assert view['reversal']['action'] in str(blocks[:9])
+
+
+def test_judgment_rejects_invented_evidence_and_identical_explanations():
+    p=payload()
+    view=investment_view(p,ref='not-read')
+    with pytest.raises(ValueError,match='evidence'):
+        api().validate_investment_view(view,p)
+    view=investment_view(p)
+    view['alternative_explanation']=view['preferred_explanation']
+    with pytest.raises(ValueError,match='distinct'):
+        api().validate_investment_view(view,p)

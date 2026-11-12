@@ -36,7 +36,7 @@ def _url(url,host):
 
 
 class FxBaogao:
-    def __init__(self,key,request=None,*,max_calls=6):
+    def __init__(self,key,request=None,*,max_calls=6,max_downloads=2):
         if not isinstance(key,str) or not key.strip() or any(c in key for c in '\r\n'):
             raise ValueError('explicit private provider credential required')
         if isinstance(max_calls,bool) or not isinstance(max_calls,int) or not 1<=max_calls<=12:
@@ -44,7 +44,9 @@ class FxBaogao:
         if request is None:
             import requests
             request=requests.request
-        self._key=key;self._request=request;self.remaining=max_calls;self.downloads_remaining=2
+        if type(max_downloads) is not int or not 1<=max_downloads<=6:
+            raise ValueError('bounded original acquisitions required')
+        self._key=key;self._request=request;self.remaining=max_calls;self.downloads_remaining=max_downloads
 
     def _fetch(self,method,url,*,body=None,api=True):
         _url(url,'api.fxbaogao.com' if api else 'dr.fxbaogao.com')

@@ -8,8 +8,36 @@ from research.delivery import ServiceError,scoped_path
 from financials.forecast import number
 
 
+def _anonymous_graph_host(host):
+    return host in {'api.onedrive.com','onedrive.live.com','my.microsoftpersonalcontent.com'} or any(
+        host.endswith(s) for s in ('.1drv.com','.storage.live.com','.sharepoint.com','.onedrive.com'))
+
+
+def _curl_graph_download(url):
+    """Optional TLS fallback for signed anonymous reads, never bearer requests."""
+    import shutil,subprocess
+    p=urlsplit(url);binary=shutil.which('curl')
+    if (not binary or p.scheme!='https' or p.username or p.password or p.port not in {None,443}
+            or not _anonymous_graph_host(p.hostname or '')):raise ServiceError(0)
+    command=[binary,'--config','-','--silent','--show-error','--fail','--proto','=https',
+        '--max-time','45','--max-filesize',str(40*1024*1024),'--http2','--write-out','%{http_code}']
+    for attempt in range(3):
+        try:
+            result=subprocess.run(command,input=('url = '+json.dumps(url)+'\n').encode(),
+                stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=50,check=False)
+        except (OSError,subprocess.TimeoutExpired):raise ServiceError(0) from None
+        if result.returncode not in {6,7,28,35,52,56} or attempt==2:break
+    if result.returncode or len(result.stdout)<3 or len(result.stdout)>40*1024*1024+3:
+        error=ServiceError(0);error.transport_code=result.returncode;raise error
+    try:status=int(result.stdout[-3:])
+    except ValueError:raise ServiceError(0) from None
+    if not 200<=status<300:raise ServiceError(status)
+    return result.stdout[:-3]
+
+
 class HTTP:
-    def __init__(self,base,headers):self.base=base.rstrip('/');self.headers=dict(headers)
+    def __init__(self,base,headers,*,curl_downloads=False):
+        self.base=base.rstrip('/');self.headers=dict(headers);self.curl_downloads=curl_downloads
     def __call__(self,method,path,*,body=None,headers=None,raw=False,authenticated=True):
         import requests
         absolute=path.startswith('https://')
@@ -18,8 +46,7 @@ class HTTP:
         if parts.scheme!='https' or parts.username or parts.password:raise ValueError('credential-free HTTPS required')
         if absolute:
             # Personal drives migrated by Microsoft return this upload-session host.
-            allowed=(host in {'api.onedrive.com','onedrive.live.com','my.microsoftpersonalcontent.com'} or any(host.endswith(s) for s in
-                     ('.1drv.com','.storage.live.com','.sharepoint.com','.onedrive.com')))
+            allowed=_anonymous_graph_host(host) and parts.port in {None,443}
             if authenticated or not allowed:raise ValueError('untrusted upload/download destination')
         request_headers=dict(self.headers if authenticated else {});request_headers.update(headers or {})
         if body is not None and not isinstance(body,bytes):
@@ -27,7 +54,10 @@ class HTTP:
             request_headers.setdefault('Content-Type','application/json')
         kwargs={'data':body} if body is not None else {}
         try:response=requests.request(method,url,headers=request_headers,timeout=(15,90),allow_redirects=False,**kwargs)
-        except requests.RequestException as error:raise ServiceError(0) from None
+        except requests.RequestException:
+            if self.curl_downloads and absolute and not authenticated and not request_headers and method=='GET' and raw:
+                return _curl_graph_download(url)
+            raise ServiceError(0) from None
         if response.status_code in {301,302,303,307,308} and method=='GET' and raw and authenticated:
             return self('GET',response.headers['Location'],raw=True,authenticated=False)
         if not 200<=response.status_code<300:raise ServiceError(response.status_code)

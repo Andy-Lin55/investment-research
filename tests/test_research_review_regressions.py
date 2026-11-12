@@ -153,3 +153,30 @@ def test_pilot_schema_upgrade_only_adds_missing_columns():
     ensure_pilot_schema(http,'pilot',{'HumanReview':{'select':{}},'RetryRequested':{'checkbox':{}}})
     assert calls[-1][0]=='PATCH'
     assert calls[-1][1]['body']['properties']=={'RetryRequested':{'checkbox':{}}}
+
+
+def test_portfolio_subscription_uses_extra_high_and_ignores_retired_model_pin(monkeypatch):
+    from research import subscription as backend
+
+    monkeypatch.delenv('CI', raising=False)
+    monkeypatch.delenv('GITHUB_ACTIONS', raising=False)
+    monkeypatch.setenv('CODEX_MODEL', 'retired-model')
+    monkeypatch.setattr(backend.shutil, 'which', lambda _: '/fixture/codex')
+
+    class Process:
+        returncode = 0
+
+        def communicate(self, prompt, timeout):
+            return '\n'.join([
+                json.dumps({'type': 'item.completed', 'item': {'type': 'agent_message', 'text': 'OK'}}),
+                json.dumps({'type': 'turn.completed'}),
+            ]), ''
+
+    def start(command, *, env, **kwargs):
+        assert 'model_reasoning_effort="xhigh"' in command
+        assert '--model' not in command
+        assert 'CODEX_MODEL' not in env
+        return Process()
+
+    monkeypatch.setattr(backend.subprocess, 'Popen', start)
+    assert backend.call_subscription('public input') == 'OK'

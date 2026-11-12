@@ -56,6 +56,9 @@ def table(headers,rows,*,url=None):
 
 
 def render(task,result,files):
+    if task.get('workflow_contract')=='holdings-v17':
+        from research.report_v17 import render as render_v17
+        return render_v17(task,result,files)
     r=result['report'];sources=[];by_id={}
     for c in [task['card'],*task.get('context',[])]:
         rid=c.get('revision_id')

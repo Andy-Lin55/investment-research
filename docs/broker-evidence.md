@@ -33,3 +33,9 @@ Notion uses native headings for independent hypothesis and broker disagreements.
 ## Rollout gates
 
 Two-company pilots first; use existing originals before more downloads. Preserve the original research question and prior candidates. Record primary-source coverage, model gaps, actual provider provenance, subscription failures, costs and independent quality review. No automatic API fallback while pricing is deferred. Real-company forecast approval, dedicated cloud credentials, source-identity mapping, and a 3–5 company 14-day trial still precede production enablement. This module alone does not activate scheduled broker discovery.
+
+## Annual forecast comparisons in holdings v17
+
+The candidate uses verified originals already available to the task. Code reads supported Chinese and English fiscal-year tables, binds each E/F value to its year, metric, original units and institutional ownership note, and saves the original row and page in the research workpapers. The writer cannot supply the numeric broker series. Unsupported layouts, unknown units, unnamed or adjusted accounting bases, consensus rows and conflicting same-date estimates do not enter the comparison. Reports published before the triggering event are labeled as such.
+
+Where both revenue and statutory parent profit are available in the same original table, the report shows how much of the base-case profit gap comes from different revenue and net margin. This is an arithmetic decomposition; business drivers still require separate evidence. Source dates and pages link back to each original. Coverage is limited to the selected institutions and supported table formats.

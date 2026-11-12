@@ -29,7 +29,7 @@ INVESTMENT_VIEW_SCHEMA = dict(
     model_implication='明确该判断改变或维持哪项模型假设及方向，缺数据可写条件式',
     reversal=dict(condition='哪项可核验的指标或新披露会推翻判断',
                   action='届时改变哪项研究判断或模型假设',due='YYYY-MM-DD'),
-    evidence=['已读的原文或实际数据 revision_id，可另附程序计算的 model_version'],
+    evidence=['investment_view_source_ids 中逐字复制的字符串'],
 )
 
 INVESTMENT_VIEW_INSTRUCTION = (
@@ -39,7 +39,8 @@ INVESTMENT_VIEW_INSTRUCTION = (
     'model_implication 要写具体驱动、调整方向和理由，例如是否调整应收周转天数、利润率或预测节奏。'
     '有程序复算的差额就用它解释取舍。没有可靠数值就给条件式方向，不编造门槛。'
     'reversal 必须给出一个最关键的可观察条件、满足后具体改什么和一个复核日期。'
-    '不要用“仍需跟踪”或罗列所有不确定性代替观点。'
+    'evidence 每项只填 investment_view_source_ids 里的原样字符串，不加页码、书名、前缀或对象。'
+    '页码写进 why_preferred。不要用“仍需跟踪”或罗列所有不确定性代替观点。'
 )
 
 
@@ -158,6 +159,7 @@ def stage_prompt(stage,payload,task):
         material['request_instruction']='data_requests[].kind必须逐字使用data_request_kinds中的英文值；不得用中文改写；没有请求则返回空数组。'
     if stage=='judgment':
         material['investment_view_instruction']=INVESTMENT_VIEW_INSTRUCTION
+        material['investment_view_source_ids']=sorted(evidence_ids(payload))
     if stage=='report':
         material['request_instruction']='报告阶段data_requests必须为空数组；未解决的请求只放open_questions及questions，勿声称已经完成。'
         if payload.get('judgment',{}).get('investment_view') is not None:
@@ -165,6 +167,7 @@ def stage_prompt(stage,payload,task):
         else:
             material['schema']['investment_view']=INVESTMENT_VIEW_SCHEMA
             material['investment_view_instruction']=INVESTMENT_VIEW_INSTRUCTION
+            material['investment_view_source_ids']=sorted(evidence_ids(payload))
     if stage=='model':
         from research.existing_data import FIELDS
         material['historical_statement_fields']={kind:[field for field,_ in fields] for kind,fields in FIELDS.items()}

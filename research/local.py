@@ -37,7 +37,7 @@ def run_local_queue(store,drive,*,limit,subscription=None,subscription_config=No
         except Exception:content=''
         if not content:counts['waiting_subscription']+=1;continue
         result=dict(task_id=task['task_id'],input_fingerprint=task['input_fingerprint'],content=content,
-                    actual_model='not_reported_by_codex_cli',requested_model=os.getenv('CODEX_MODEL') or None,
+                    actual_model='not_reported_by_codex_cli',requested_model=None,
                     model_provenance='unreported')
         try:
             drive.put_immutable(expected,json.dumps(result,ensure_ascii=False,allow_nan=False).encode())

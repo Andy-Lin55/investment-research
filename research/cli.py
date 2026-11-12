@@ -284,7 +284,7 @@ def main(argv=None):
             elif args.mode=='local':
                 from research.local import run_local_queue
                 result=run_local_queue(store,drive,limit=args.limit,subscription_config={
-                    'cli_path':env.get('CODEX_CLI_PATH'),'model':env.get('CODEX_MODEL')})
+                    'cli_path':env.get('CODEX_CLI_PATH')})
             else:
                 from research.context import prepare_task_context
                 reports=NotionReports(http,env['RESEARCH_NOTION_REPORTS_SOURCE_ID']);providers=configured_providers(env)

@@ -288,7 +288,9 @@ def run(args,env):
     store=NotionTaskStore(http,env['RESEARCH_NOTION_TASKS_SOURCE_ID'],content_loader=lambda ref:drive.read(ref['path'])[0])
     if args.mode=='local':
         from research.local import run_local_queue
-        result=run_local_queue(store,drive,limit=args.limit,workflow_contract='holdings-v17');print(json.dumps(result));return 0
+        result=run_local_queue(store,drive,limit=args.limit,workflow_contract='holdings-v17',
+            subscription_config={'cli_path':env.get('CODEX_CLI_PATH')})
+        print(json.dumps(result));return 0
     roster=active_roster(http,env,registry(env,drive));profiles=[];gaps=list(roster['unmapped'])
     feeds=json.loads(env.get('RESEARCH_OFFICIAL_FEEDS_JSON','[]'))
     for holding in roster['holdings']:

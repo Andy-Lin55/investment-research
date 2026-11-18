@@ -412,9 +412,12 @@ def _job_daily_briefing(*, preview_only: bool = False) -> None:
     logger.info("📋 开始生成每日简报")
     from notion_sync.notion_client_wrapper import get_client
     from config.settings import NOTION_EVENTS_DB_ID
+    from data_ingestion import disclosure_analysis
     from data_ingestion.ai_client import call_ai as _call_ai_briefing
     from scheduler.briefing import beijing_today, build_daily_briefing, fetch_briefing_events
-    from data_ingestion.disclosure_analysis import analyze_disclosure, disclosure_key, is_primary_disclosure
+    from data_ingestion.disclosure_analysis import (
+        disclosure_key, group_primary_disclosures, is_primary_disclosure,
+    )
 
     from notion_sync.notion_client_wrapper import notion_request_with_retry
     client = get_client()
@@ -437,19 +440,26 @@ def _job_daily_briefing(*, preview_only: bool = False) -> None:
         return
 
     primary_pages = [page for page in events if is_primary_disclosure(page)]
+    primary_groups = group_primary_disclosures(primary_pages)
     primary_analyses = {}
-    if primary_pages:
+    if primary_groups:
         worker_count = 4 if os.environ.get("GITHUB_ACTIONS") == "true" else 1
-        logger.info(f"第一手披露 {len(primary_pages)} 条，最多 {worker_count} 路同时解析")
+        logger.info(f"第一手披露 {len(primary_pages)} 条（合并为 {len(primary_groups)} 组），最多 {worker_count} 路同时解析")
         with ThreadPoolExecutor(max_workers=worker_count) as executor:
-            pending = {executor.submit(analyze_disclosure, page): disclosure_key(page) for page in primary_pages}
+            pending = {
+                executor.submit(
+                    disclosure_analysis.analyze_disclosure if len(group) == 1 else disclosure_analysis.analyze_disclosure_group,
+                    group[0] if len(group) == 1 else group,
+                ): disclosure_key(group[0])
+                for group in primary_groups
+            }
             for completed in as_completed(pending):
                 key = pending[completed]
                 result = completed.result()
                 primary_analyses[key] = result
                 log = logger.info if result.status == "complete" else logger.warning
                 log(f"第一手披露详解 [{key}]: {result.status}，{len(result.body)} 字")
-    logger.info(f"简报事件 {len(events)} 条，第一手披露详解 {len(primary_analyses)} 条")
+    logger.info(f"简报事件 {len(events)} 条，第一手披露详解 {len(primary_analyses)} 组")
 
     # The overview cannot replace or truncate the independent disclosure sections.
     material = build_daily_briefing(events, today, primary_analyses)
@@ -466,7 +476,8 @@ def _job_daily_briefing(*, preview_only: bool = False) -> None:
         return
 
     # 3. 发送简报：Feishu → SMTP → Apple Mail（按优先级）
-    subject = f"📊 投研日报 {today}（{len(events)} 条事件）"
+    event_total = getattr(material, "item_count", 0) or len(events)
+    subject = f"📊 投研日报 {today}（{event_total} 条事件）"
     _send_briefing(subject, briefing_body, today)
 
 

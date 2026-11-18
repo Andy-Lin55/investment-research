@@ -123,17 +123,120 @@ def _download_pdf(pdf_url: str, save_path: Path) -> bool:
 
 def _classify_title(title: str) -> str:
     title = title.upper()
-    if ("QUARTER" in title and any(k in title for k in ["REPORT", "RESULT", "FINANCIAL"])) or any(
-        k in title for k in ["季度报告", "季度報告", "季報", "季度業績", "季度业绩"]
+    if (
+        ("QUARTER" in title and any(k in title for k in ["REPORT", "RESULT", "FINANCIAL"]))
+        or any(k in title for k in ["季度报告", "季度報告", "季報", "季度業績", "季度业绩"])
+        or (("三個月" in title or "三个月" in title) and ("業績" in title or "业绩" in title))
     ):
         return "季度报告"
     elif any(k in title for k in ["INTERIM REPORT", "INTERIM RESULTS", "半年度报告", "半年度報告", "中期报告", "中期報告"]):
         return "中期报告"
     elif any(k in title for k in ["ANNUAL REPORT", "年度报告", "年度報告"]):
         return "年度报告"
-    elif any(k in title for k in ["ANNUAL RESULTS", "FINANCIAL RESULTS", "UNAUDITED RESULTS", "AUDITED RESULTS", "业绩公告", "業績公告"]):
+    elif any(k in title for k in ["ANNUAL RESULTS", "FINANCIAL RESULTS", "UNAUDITED RESULTS", "AUDITED RESULTS", "业绩公告", "業績公告", "財務業績", "财务业绩"]):
         return "业绩公告"
     return "公告"
+
+
+_DOC_TYPE_PRIORITY = {
+    "年度报告": 0,
+    "中期报告": 1,
+    "季度报告": 2,
+    "业绩公告": 3,
+    "公告": 4,
+}
+
+
+def _more_specific_doc_type(first: str, second: str) -> str:
+    return first if _DOC_TYPE_PRIORITY.get(first, 99) <= _DOC_TYPE_PRIORITY.get(second, 99) else second
+
+
+def _hk_doc_parts(url: str) -> tuple[str, int | None, bool]:
+    path = url.split("?", 1)[0].rstrip("/")
+    folder, _, filename = path.rpartition("/")
+    match = re.fullmatch(r"(\d+?)(_c)?\.[^.]+", filename, re.IGNORECASE)
+    if not match:
+        return folder, None, filename.lower().endswith(("_c.pdf", "_c.htm", "_c.html"))
+    return folder, int(match.group(1)), bool(match.group(2))
+
+
+def _is_hk_stub(item: dict) -> bool:
+    url = (item.get("url") or "").lower().split("?", 1)[0]
+    title = item.get("title") or ""
+    return url.endswith(("_c.htm", "_c.html")) or "英文版面發布" in title or "英文版面发布" in title
+
+
+def _dedupe_hk_filings(raw: list[dict]) -> list[dict]:
+    """Collapse exact duplicates and EN/ZH bilingual HKEX pairs into one canonical filing."""
+    exact: list[dict] = []
+    by_key: dict[object, dict] = {}
+    for item in sorted(raw, key=lambda x: x["date"], reverse=True):
+        key = item["url"] or (item["title"], item["date"])
+        existing = by_key.get(key)
+        if existing is not None:
+            existing["doc_type"] = _more_specific_doc_type(existing["doc_type"], item["doc_type"])
+            continue
+        copy = dict(item)
+        by_key[key] = copy
+        exact.append(copy)
+
+    # Match EN and ZH items from the same filing into one canonical item.
+    consumed: set[int] = set()
+    by_index = list(enumerate(exact))
+    en_candidates = [
+        (idx, item, _hk_doc_parts(item.get("url", "")))
+        for idx, item in by_index
+        if (item.get("_lang") == "en" if "_lang" in item else not _hk_doc_parts(item.get("url", ""))[2])
+    ]
+    zh_candidates = [
+        (idx, item, _hk_doc_parts(item.get("url", "")))
+        for idx, item in by_index
+        if (item.get("_lang") == "zh" if "_lang" in item else _hk_doc_parts(item.get("url", ""))[2])
+    ]
+
+    merged_overrides: dict[int, dict] = {}
+    for z_idx, z_item, (z_folder, z_num, z_is_c) in zh_candidates:
+        if z_idx in consumed:
+            continue
+        best_match: tuple[int, int] | None = None  # (priority_score, e_idx)
+        for e_idx, e_item, (e_folder, e_num, e_is_c) in en_candidates:
+            if e_idx in consumed or e_idx == z_idx:
+                continue
+            if z_item["date"] != e_item["date"]:
+                continue
+            same_dt = bool(z_item.get("_date_time") and z_item.get("_date_time") == e_item.get("_date_time"))
+            if z_num is not None and e_num is not None and z_folder == e_folder and z_is_c != e_is_c:
+                diff = z_num - e_num
+                if abs(diff) <= 2:
+                    score = (0 if diff == 1 else 1, abs(diff), 0 if same_dt else 1)
+                    if best_match is None or score < best_match[0]:
+                        best_match = (score, e_idx)
+            elif same_dt and z_item.get("_lang") != e_item.get("_lang"):
+                score = (2, 0, 0)
+                if best_match is None or score < best_match[0]:
+                    best_match = (score, e_idx)
+
+        if best_match is None:
+            continue
+        e_idx = best_match[1]
+        e_item = exact[e_idx]
+        if _is_hk_stub(z_item) and not _is_hk_stub(e_item):
+            chosen, dropped_idx = dict(e_item), z_idx
+            chosen["doc_type"] = _more_specific_doc_type(e_item["doc_type"], z_item["doc_type"])
+            merged_overrides[e_idx] = chosen
+        else:
+            chosen, dropped_idx = dict(z_item), e_idx
+            chosen["doc_type"] = _more_specific_doc_type(z_item["doc_type"], e_item["doc_type"])
+            merged_overrides[z_idx] = chosen
+        consumed.add(dropped_idx)
+
+    deduped = []
+    for idx, item in by_index:
+        if idx in consumed:
+            continue
+        final_item = merged_overrides.get(idx, item)
+        deduped.append({k: v for k, v in final_item.items() if not k.startswith("_")})
+    return deduped
 
 def fetch_hk_filings(
     ticker: str,
@@ -250,21 +353,16 @@ def fetch_hk_filings(
                 "date": doc_date,
                 "url": doc_url,
                 "pdf_path": pdf_path,
+                "_lang": language,
+                "_date_time": str(item.get("DATE_TIME", "")).strip(),
             })
 
-    # 按日期排序 + 去重 + 截断
-    seen: set[tuple] = set()
-    results: list[dict] = []
-    for r in sorted(raw, key=lambda x: x["date"], reverse=True):
-        key = r["url"] or (r["title"], r["date"])
-        if key not in seen:
-            seen.add(key)
-            results.append(r)
-        if len(results) >= max_items:
-            break
+    # 按日期排序 + 双语配对去重 + 截断
+    deduped = _dedupe_hk_filings(raw)
+    results = deduped[:max_items]
 
     logger.info(f"[{ticker}] 找到 {len(results)} 条港股文件")
-    if len({r['url'] or (r['title'], r['date']) for r in raw}) > len(results):
+    if len(deduped) > len(results):
         health.limitations.append("Combined result limit reached")
     health.finish(len(results), strict)
     return results

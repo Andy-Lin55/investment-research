@@ -257,3 +257,161 @@ def test_disclosure_requests_json_mode_only_from_verified_primary_endpoint(monke
     primary, fallback = provider.call_args_list
     assert primary.kwargs["json_object"] is True
     assert not fallback.kwargs.get("json_object")
+
+
+def _custom_event(
+    *, identifier: str, ticker: str, event_type: str, event_date: str,
+    url: str, summary: str = "", importance: str = "Medium",
+):
+    return {
+        "id": identifier,
+        "properties": {
+            "Name": {"title": [{"plain_text": f"{ticker} {event_type} {event_date}"}]},
+            "Ticker": {"rich_text": [{"plain_text": ticker}]},
+            "EventType": {"select": {"name": event_type}},
+            "Importance": {"select": {"name": importance}},
+            "EventDate": {"date": {"start": event_date}},
+            "ProcessedAt": {"date": {"start": "2026-11-18"}},
+            "AI Summary": {"rich_text": [{"plain_text": summary}]},
+            "KeyNumbers": {"rich_text": [{"plain_text": "{}"}]},
+            "SourceURL": {"url": url},
+        },
+    }
+
+
+def test_group_primary_disclosures_combines_bilingual_and_same_meeting_filings():
+    from data_ingestion.disclosure_analysis import group_primary_disclosures
+
+    hk_zh = _custom_event(
+        identifier="hk-zh", ticker="9896.HK", event_type="公告", event_date="2026-11-17",
+        url="https://www1.hkexnews.hk/listedco/listconews/sehk/2026/1117/2026111700379_c.pdf",
+    )
+    hk_en = _custom_event(
+        identifier="hk-en", ticker="9896.HK", event_type="季度报告", event_date="2026-11-17",
+        url="https://www1.hkexnews.hk/listedco/listconews/sehk/2026/1117/2026111700378.pdf",
+    )
+    stub1 = _custom_event(
+        identifier="stub1", ticker="0005.HK", event_type="公告", event_date="2026-11-18",
+        url="https://www1.hkexnews.hk/listedco/listconews/sehk/2026/1118/2026111800014_c.htm",
+        summary="於英文版面發布了一項公告",
+    )
+    pdmr = _custom_event(
+        identifier="pdmr", ticker="0005.HK", event_type="公告", event_date="2026-11-18",
+        url="https://www1.hkexnews.hk/listedco/listconews/sehk/2026/1118/2026111800013.pdf",
+    )
+    stub2 = _custom_event(
+        identifier="stub2", ticker="0005.HK", event_type="公告", event_date="2026-11-18",
+        url="https://www1.hkexnews.hk/listedco/listconews/sehk/2026/1118/2026111800016_c.htm",
+    )
+    buyback = _custom_event(
+        identifier="buyback", ticker="0005.HK", event_type="公告", event_date="2026-11-18",
+        url="https://www1.hkexnews.hk/listedco/listconews/sehk/2026/1118/2026111800015.pdf",
+    )
+    midea_res = _custom_event(
+        identifier="midea-res", ticker="000333.SZ", event_type="股东会", event_date="2026-11-18",
+        url="http://static.cninfo.com.cn/finalpage/2026-11-18/1225676276.PDF",
+    )
+    midea_law = _custom_event(
+        identifier="midea-law", ticker="000333.SZ", event_type="股东会", event_date="2026-11-18",
+        url="http://static.cninfo.com.cn/finalpage/2026-11-18/1225676277.PDF",
+    )
+
+    groups = group_primary_disclosures([hk_zh, hk_en, stub1, pdmr, stub2, buyback, midea_res, midea_law])
+    assert [[p["id"] for p in g] for g in groups] == [
+        ["hk-en", "hk-zh"],
+        ["pdmr", "stub1"],
+        ["buyback", "stub2"],
+        ["midea-res", "midea-law"],
+    ]
+
+
+def test_analyze_disclosure_group_reads_one_bilingual_pdf_and_merges_complementary_pdfs():
+    from data_ingestion.disclosure_analysis import analyze_disclosure_group
+
+    hk_zh = _custom_event(
+        identifier="hk-zh", ticker="9618.HK", event_type="季度报告", event_date="2026-11-17",
+        url="https://www1.hkexnews.hk/listedco/listconews/sehk/2026/1117/2026111700792_c.pdf",
+    )
+    hk_en = _custom_event(
+        identifier="hk-en", ticker="9618.HK", event_type="季度报告", event_date="2026-11-17",
+        url="https://www1.hkexnews.hk/listedco/listconews/sehk/2026/1117/2026111700791.pdf",
+    )
+    read_calls = []
+
+    def read_hk(url):
+        read_calls.append(url)
+        return ([(url, "京东第三季度营收3095.93亿元")], [])
+
+    hk_res = analyze_disclosure_group([hk_en, hk_zh], read_sources=read_hk, call_ai=lambda *a, **k: analysis_json())
+    assert hk_res.status == "complete"
+    assert read_calls == [hk_zh["properties"]["SourceURL"]["url"]]
+    assert set(hk_res.source_urls) == {
+        hk_en["properties"]["SourceURL"]["url"],
+        hk_zh["properties"]["SourceURL"]["url"],
+    }
+
+    midea_res = _custom_event(
+        identifier="midea-res", ticker="000333.SZ", event_type="股东会", event_date="2026-11-18",
+        url="http://static.cninfo.com.cn/finalpage/2026-11-18/1225676276.PDF",
+    )
+    midea_law = _custom_event(
+        identifier="midea-law", ticker="000333.SZ", event_type="股东会", event_date="2026-11-18",
+        url="http://static.cninfo.com.cn/finalpage/2026-11-18/1225676277.PDF",
+    )
+    prompts = []
+
+    def ai(prompt, **kwargs):
+        prompts.append(prompt)
+        return analysis_json("股东会通过两项议案并获律师见证")
+
+    midea_out = analyze_disclosure_group(
+        [midea_res, midea_law],
+        read_sources=lambda url: ([(url, "决议正文" if "276" in url else "法律意见书正文")], []),
+        call_ai=ai,
+    )
+    assert midea_out.status == "complete"
+    assert len(prompts) == 3  # 2 document fragments + 1 combined synthesis
+    assert "决议正文" in prompts[0] and "法律意见书正文" in prompts[1]
+    assert set(midea_out.source_urls) == {
+        midea_res["properties"]["SourceURL"]["url"],
+        midea_law["properties"]["SourceURL"]["url"],
+    }
+
+
+def test_build_daily_briefing_merges_duplicate_disclosures_and_shared_news():
+    from data_ingestion.disclosure_analysis import disclosure_key
+
+    hk_zh = _custom_event(
+        identifier="hk-zh", ticker="9896.HK", event_type="公告", event_date="2026-11-17",
+        url="https://www1.hkexnews.hk/listedco/listconews/sehk/2026/1117/2026111700379_c.pdf",
+    )
+    hk_en = _custom_event(
+        identifier="hk-en", ticker="9896.HK", event_type="季度报告", event_date="2026-11-17",
+        url="https://www1.hkexnews.hk/listedco/listconews/sehk/2026/1117/2026111700378.pdf",
+    )
+    bank1 = _custom_event(
+        identifier="n1", ticker="002142.SZ", event_type="新闻资讯", event_date="2026-11-17",
+        url="http://finance.eastmoney.com/a/202611173933022267.html",
+        summary="15.32亿元资金今日流出银行股", importance="Medium",
+    )
+    bank2 = _custom_event(
+        identifier="n2", ticker="601166.SH", event_type="新闻资讯", event_date="2026-11-17",
+        url="http://finance.eastmoney.com/a/202611173933022267.html",
+        summary="15.32亿元资金今日流出银行股", importance="High",
+    )
+    analyses = {
+        disclosure_key(hk_en): DisclosureAnalysis(
+            "名创优品合并解析正文", "complete",
+            (hk_en["properties"]["SourceURL"]["url"], hk_zh["properties"]["SourceURL"]["url"]),
+        ),
+    }
+
+    briefing = build_daily_briefing([hk_zh, hk_en, bank1, bank2], "2026-11-18", analyses)
+    body = briefing.render("今日概览。[1][2]")
+    assert briefing.item_count == 2
+    assert "重点事件 2 条" in body
+    assert body.count("名创优品合并解析正文") == 1
+    assert "9896.HK 季度报告 2026-11-17（季度报告）" in body
+    assert "601166.SH / 002142.SZ" in body
+    assert body.count("15.32亿元资金今日流出银行股") == 1
+    assert "2026111700378.pdf" in body and "2026111700379_c.pdf" in body

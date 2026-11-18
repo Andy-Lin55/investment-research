@@ -195,3 +195,39 @@ def test_cninfo_keeps_a_terminal_http_error_visible_without_retrying(monkeypatch
     assert health.status == "error"
     assert health.errors[0]["http_status"] == 403
     assert post.call_count == 1
+
+
+def test_hk_bilingual_pairs_collapse_to_one_and_skip_chinese_stubs(monkeypatch):
+    import json
+    from data_ingestion import hkex_fetcher as hk
+
+    monkeypatch.setattr(hk, "REQUEST_INTERVAL_SECONDS", 0)
+    monkeypatch.setattr(hk, "_get_stock_index", lambda code: 5)
+    en_rows = [
+        {"STOCK_CODE": "00005", "TITLE": "PDMR Dealing", "DATE_TIME": "18/11/2026 08:00",
+         "FILE_LINK": "/listedco/listconews/sehk/2026/1118/2026111800013.pdf"},
+        {"STOCK_CODE": "00005", "TITLE": "Transaction in Own Shares", "DATE_TIME": "18/11/2026 08:00",
+         "FILE_LINK": "/listedco/listconews/sehk/2026/1118/2026111800015.pdf"},
+        {"STOCK_CODE": "00005", "TITLE": "Third Quarterly Results 2026", "DATE_TIME": "17/11/2026 18:00",
+         "FILE_LINK": "/listedco/listconews/sehk/2026/1117/2026111700378.pdf"},
+    ]
+    zh_rows = [
+        {"STOCK_CODE": "00005", "TITLE": "於英文版面發布之公告", "DATE_TIME": "18/11/2026 08:00",
+         "FILE_LINK": "/listedco/listconews/sehk/2026/1118/2026111800014_c.htm"},
+        {"STOCK_CODE": "00005", "TITLE": "於英文版面發布之公告", "DATE_TIME": "18/11/2026 08:00",
+         "FILE_LINK": "/listedco/listconews/sehk/2026/1118/2026111800016_c.htm"},
+        {"STOCK_CODE": "00005", "TITLE": "截至2026年9月30日止三個月及九個月業績公告", "DATE_TIME": "17/11/2026 18:00",
+         "FILE_LINK": "/listedco/listconews/sehk/2026/1117/2026111700379_c.pdf"},
+    ]
+
+    def query(url, *, params, **kwargs):
+        rows = en_rows if params["lang"] == "en" else zh_rows
+        return Mock(json=lambda: {"result": json.dumps(rows), "hasNextRow": False, "recordCnt": len(rows)})
+
+    monkeypatch.setattr(hk.requests, "get", Mock(side_effect=query))
+    results = hk.fetch_hk_filings("0005.HK", since_date="2026-11-17", until_date="2026-11-18")
+    assert [(r["url"].rsplit("/", 1)[-1], r["doc_type"]) for r in results] == [
+        ("2026111800013.pdf", "公告"),
+        ("2026111800015.pdf", "公告"),
+        ("2026111700379_c.pdf", "季度报告"),
+    ]

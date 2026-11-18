@@ -13,7 +13,7 @@ CODEX_TIMEOUT_SECONDS=60
 
 留空 `CODEX_MODEL` 时使用 CLI 默认可用模型。可以指定该账号实际支持的 Codex 模型，不假定它和网页 ChatGPT 的模型菜单完全相同。
 
-启用后的调用顺序是：本机订阅 Codex → DMXAPI `gemini-3.8-flash` → Google Gemini。订阅超时、未登录、额度用尽、CLI 不存在或未返回有效最终文本时，会自动进入 API 备用链。关闭开关即可恢复原来的两级 API 调用。
+启用后的调用顺序是：本机订阅 Codex → Google Gemini `gemini-4-hydrogen` → DMXAPI。订阅超时、未登录、额度用尽、CLI 不存在或未返回有效最终文本时，会自动进入 API 备用链。关闭开关即可恢复原来的两级 API 调用。
 
 每个 API 通道不叠加 SDK 内部重试，遇到调用失败后立即进入下一通道，避免一次失败持续阻塞整封简报。
 

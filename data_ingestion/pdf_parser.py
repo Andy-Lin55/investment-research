@@ -1,6 +1,6 @@
 """
 data_ingestion/pdf_parser.py
-PDF 文字提取（PyMuPDF）+ AI 解析（DMXAPI → Gemini fallback）
+PDF 文字提取（PyMuPDF）+ AI 解析（Google Gemini → DMXAPI fallback）
 """
 from __future__ import annotations
 

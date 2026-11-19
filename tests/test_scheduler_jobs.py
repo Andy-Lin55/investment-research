@@ -457,3 +457,59 @@ def test_filing_notion_rejection_is_not_downgraded_to_a_source_warning(monkeypat
 
     with pytest.raises(SourceFetchError, match="0700.HK"):
         jobs._job_fetch_filings()
+
+
+def test_daily_briefing_groups_bilingual_disclosures_and_uses_merged_count_in_subject(monkeypatch):
+    from data_ingestion import ai_client, disclosure_analysis
+    from notion_sync import notion_client_wrapper
+    from scheduler import briefing
+
+    monkeypatch.setattr(notion_client_wrapper, "get_client", Mock())
+    hk_zh = {
+        "id": "hk-zh",
+        "properties": {
+            "Name": {"title": [{"plain_text": "9618.HK 季度报告 2026-11-17"}]},
+            "Ticker": {"rich_text": [{"plain_text": "9618.HK"}]},
+            "EventType": {"select": {"name": "季度报告"}},
+            "Importance": {"select": {"name": "Medium"}},
+            "EventDate": {"date": {"start": "2026-11-17"}},
+            "AI Summary": {"rich_text": []},
+            "KeyNumbers": {"rich_text": []},
+            "SourceURL": {"url": "https://www1.hkexnews.hk/listedco/listconews/sehk/2026/1117/2026111700792_c.pdf"},
+        },
+    }
+    hk_en = {
+        "id": "hk-en",
+        "properties": {
+            "Name": {"title": [{"plain_text": "9618.HK 季度报告 2026-11-17"}]},
+            "Ticker": {"rich_text": [{"plain_text": "9618.HK"}]},
+            "EventType": {"select": {"name": "季度报告"}},
+            "Importance": {"select": {"name": "Medium"}},
+            "EventDate": {"date": {"start": "2026-11-17"}},
+            "AI Summary": {"rich_text": []},
+            "KeyNumbers": {"rich_text": []},
+            "SourceURL": {"url": "https://www1.hkexnews.hk/listedco/listconews/sehk/2026/1117/2026111700791.pdf"},
+        },
+    }
+    monkeypatch.setattr(briefing, "beijing_today", lambda: "2026-11-18")
+    monkeypatch.setattr(briefing, "fetch_briefing_events", Mock(return_value=[hk_zh, hk_en]))
+    group_mock = Mock(return_value=disclosure_analysis.DisclosureAnalysis(
+        "京东合并详解", "complete",
+        ("https://www1.hkexnews.hk/listedco/listconews/sehk/2026/1117/2026111700792_c.pdf",
+         "https://www1.hkexnews.hk/listedco/listconews/sehk/2026/1117/2026111700791.pdf"),
+    ))
+    single_mock = Mock(side_effect=AssertionError("Paired disclosures should use analyze_disclosure_group"))
+    monkeypatch.setattr(disclosure_analysis, "analyze_disclosure_group", group_mock)
+    monkeypatch.setattr(disclosure_analysis, "analyze_disclosure", single_mock)
+    monkeypatch.setattr(ai_client, "call_ai", Mock(return_value="今日概览。[1]"))
+    send = Mock()
+    monkeypatch.setattr(jobs, "_send_briefing", send)
+
+    jobs._job_daily_briefing(preview_only=False)
+
+    group_mock.assert_called_once()
+    single_mock.assert_not_called()
+    subject, body, today = send.call_args.args
+    assert today == "2026-11-18"
+    assert subject == "📊 投研日报 2026-11-18（1 条事件）"
+    assert body.count("京东合并详解") == 1

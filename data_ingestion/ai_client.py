@@ -1,6 +1,6 @@
 """
 data_ingestion/ai_client.py
-AI 调用统一入口：可选本机 Codex 订阅 → DMXAPI → Google Gemini
+AI 调用统一入口：可选本机 Codex 订阅 → Google Gemini → DMXAPI
 """
 from __future__ import annotations
 
@@ -9,8 +9,8 @@ from collections.abc import Callable
 from loguru import logger
 
 from config.settings import (
-    DMXAPI_KEY, DMXAPI_BASE_URL, DMXAPI_MODEL,
     GEMINI_API_KEY, GEMINI_BASE_URL, GEMINI_MODEL,
+    DMXAPI_KEY, DMXAPI_BASE_URL, DMXAPI_MODEL,
     CODEX_SUBSCRIPTION_ENABLED,
 )
 
@@ -57,30 +57,30 @@ def call_ai(prompt: str, timeout: int = 60, *, validate: Callable[[str], object]
         except Exception as error:
             logger.warning(f"Codex 订阅调用异常（{type(error).__name__}），使用 API 备用链")
 
-    # ── 尝试 DMXAPI，失败或结果不可用时让 Gemini 接手 ──
-    if DMXAPI_KEY:
-        try:
-            content = _call_api(
-                prompt, api_key=DMXAPI_KEY, base_url=DMXAPI_BASE_URL,
-                model=DMXAPI_MODEL, timeout=min(timeout, 120), json_object=validate is not None,
-            )
-            if _usable(content, "DMXAPI", validate):
-                return content
-            logger.info("DMXAPI 内容不可用，切换 Gemini")
-        except Exception as error:
-            logger.warning(f"DMXAPI 失败，切换 Gemini（{type(error).__name__}）")
-
-    # ── Fallback: Gemini（用完整 timeout）──
+    # ── 尝试 Google Gemini，失败或结果不可用时让 DMXAPI 接手 ──
     if GEMINI_API_KEY:
         try:
             content = _call_api(
                 prompt, api_key=GEMINI_API_KEY, base_url=GEMINI_BASE_URL,
-                model=GEMINI_MODEL, timeout=timeout,
+                model=GEMINI_MODEL, timeout=min(timeout, 120), json_object=validate is not None,
             )
             if _usable(content, "Gemini", validate):
-                logger.info("Gemini fallback 成功")
+                return content
+            logger.info("Gemini 内容不可用，切换 DMXAPI")
+        except Exception as error:
+            logger.warning(f"Gemini 失败，切换 DMXAPI（{type(error).__name__}）")
+
+    # ── Fallback: DMXAPI（用完整 timeout）──
+    if DMXAPI_KEY:
+        try:
+            content = _call_api(
+                prompt, api_key=DMXAPI_KEY, base_url=DMXAPI_BASE_URL,
+                model=DMXAPI_MODEL, timeout=timeout,
+            )
+            if _usable(content, "DMXAPI", validate):
+                logger.info("DMXAPI fallback 成功")
                 return content
         except Exception as error:
-            logger.error(f"Gemini fallback 也失败（{type(error).__name__}）")
+            logger.error(f"DMXAPI fallback 也失败（{type(error).__name__}）")
 
     return ""

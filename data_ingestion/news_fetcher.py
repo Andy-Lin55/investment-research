@@ -106,7 +106,7 @@ def fetch_a_share_news(ticker: str) -> list[dict]:
     return results
 
 
-# ── 美股新闻相关性过滤（call_ai with DMXAPI→Gemini fallback）──
+# ── 美股新闻相关性过滤（call_ai with Gemini→DMXAPI fallback）──
 
 def _batch_relevance_filter(
     headlines: list[str], company_name: str, base_ticker: str

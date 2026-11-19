@@ -29,15 +29,15 @@ CODEX_CLI_PATH: str = os.getenv("CODEX_CLI_PATH", "codex")
 CODEX_MODEL: str = os.getenv("CODEX_MODEL", "")
 CODEX_TIMEOUT_SECONDS: int = int(os.getenv("CODEX_TIMEOUT_SECONDS", "60"))
 
-# ── DMXAPI (OpenAI-compatible) ───────────────────────────────
-DMXAPI_KEY: str = os.getenv("DMXAPI_KEY", "")
-DMXAPI_BASE_URL: str = "https://www.dmxapi.cn/v1"
-DMXAPI_MODEL: str = "gemini-3.8-flash"
-
-# ── Google Gemini (fallback) ──────────────────────────────────
+# ── Google Gemini (primary) ───────────────────────────────────
 GEMINI_API_KEY: str  = os.getenv("GEMINI_API_KEY", "")
 GEMINI_BASE_URL: str = "https://generativelanguage.googleapis.com/v1beta/openai/"
-GEMINI_MODEL: str    = "gemini-3.8-flash"
+GEMINI_MODEL: str    = "gemini-4-hydrogen"
+
+# ── DMXAPI (OpenAI-compatible fallback) ───────────────────────
+DMXAPI_KEY: str = os.getenv("DMXAPI_KEY", "")
+DMXAPI_BASE_URL: str = "https://www.dmxapi.cn/v1"
+DMXAPI_MODEL: str = "gemini-4-hydrogen"
 
 # ── 每日简报通知 ──────────────────────────────────────────────
 BRIEFING_TO_EMAIL: str = os.getenv("BRIEFING_TO_EMAIL", "andyl603504@icloud.com")

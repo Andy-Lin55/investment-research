@@ -36,23 +36,24 @@ def test_subscription_success_avoids_paid_api(routing):
 
 
 @pytest.mark.parametrize("codex_failure", ["", RuntimeError("unavailable")])
-def test_subscription_failure_falls_back_to_current_dmx(routing, codex_failure):
+def test_subscription_failure_falls_back_to_current_gemini(routing, codex_failure):
     codex, api = routing
     if isinstance(codex_failure, Exception):
         codex.side_effect = codex_failure
     else:
         codex.return_value = codex_failure
     assert ai_client.call_ai("公告") == "API 结果"
-    assert api.call_args.kwargs["api_key"] == "test-dmx"
-    assert api.call_args.kwargs["model"] == "gemini-3.8-flash"
+    assert api.call_args.kwargs["api_key"] == "test-google"
+    assert api.call_args.kwargs["model"] == "gemini-4-hydrogen"
 
 
-def test_subscription_and_dmx_failure_fall_back_to_google(routing):
+def test_subscription_and_gemini_failure_fall_back_to_dmx(routing):
     codex, api = routing
     codex.return_value = ""
-    api.side_effect = [RuntimeError("dmx down"), "Google 结果"]
-    assert ai_client.call_ai("公告") == "Google 结果"
-    assert [call.kwargs["api_key"] for call in api.call_args_list] == ["test-dmx", "test-google"]
+    api.side_effect = [RuntimeError("gemini down"), "DMX 结果"]
+    assert ai_client.call_ai("公告") == "DMX 结果"
+    assert [call.kwargs["api_key"] for call in api.call_args_list] == ["test-google", "test-dmx"]
+    assert [call.kwargs["model"] for call in api.call_args_list] == ["gemini-4-hydrogen", "gemini-4-hydrogen"]
 
 
 def test_all_backends_unavailable_return_empty(routing):

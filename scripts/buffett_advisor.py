@@ -25,7 +25,10 @@ _ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT))
 
 from openai import OpenAI
-from config.settings import DMXAPI_KEY, DMXAPI_BASE_URL, DMXAPI_MODEL
+from config.settings import (
+    GEMINI_API_KEY, GEMINI_BASE_URL, GEMINI_MODEL,
+    DMXAPI_KEY, DMXAPI_BASE_URL, DMXAPI_MODEL,
+)
 
 # ── 知识库 ───────────────────────────────────────────────────
 _PHILOSOPHY_PATH = _ROOT / "docs" / "buffett_philosophy.md"
@@ -120,7 +123,12 @@ def main() -> None:
     philosophy = _load_philosophy()
     system_prompt = _SYSTEM_PROMPT_TEMPLATE.format(philosophy_content=philosophy)
 
-    client = OpenAI(api_key=DMXAPI_KEY, base_url=DMXAPI_BASE_URL)
+    if GEMINI_API_KEY:
+        client = OpenAI(api_key=GEMINI_API_KEY, base_url=GEMINI_BASE_URL)
+        active_model = GEMINI_MODEL
+    else:
+        client = OpenAI(api_key=DMXAPI_KEY, base_url=DMXAPI_BASE_URL)
+        active_model = DMXAPI_MODEL
     messages: list[dict] = []
 
     # 命令行参数：直接带 ticker 启动
@@ -132,7 +140,7 @@ def main() -> None:
         print(f"⏳ 正在分析 {initial_ticker}...\n")
 
         resp = client.chat.completions.create(
-            model=DMXAPI_MODEL,
+            model=active_model,
             messages=[{"role": "system", "content": system_prompt}] + messages,
             timeout=120,
         )
@@ -173,7 +181,7 @@ def main() -> None:
 
         try:
             resp = client.chat.completions.create(
-                model=DMXAPI_MODEL,
+                model=active_model,
                 messages=[{"role": "system", "content": system_prompt}] + messages,
                 timeout=120,
             )

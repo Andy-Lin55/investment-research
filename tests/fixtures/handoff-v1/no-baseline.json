@@ -1,0 +1,11 @@
+{
+  "schema_version": "1.0", "handoff_id": "no-baseline-v1", "issuer_id": "issuer-a",
+  "securities": [{"market": "CN", "ticker": "000001.SZ", "currency": "CNY", "share_class": "A"}],
+  "producer": {"project": "synthetic-workbench", "run_id": "no-baseline", "git_commit": "synthetic", "created_at": "2026-10-10T09:00:00+08:00"},
+  "knowledge_cutoff": "2026-10-09T23:00:00+08:00", "parent_handoff_id": null,
+  "research_question": "营运资金是否可控？",
+  "theses": [{"thesis_id": "working-capital", "claim": "应收增长须可控", "driver": "应收账款", "falsifier": "回款持续恶化", "status": "candidate", "evidence_refs": [], "research_assumption": "首次覆盖暂按同业周转观察，尚无采纳基线"}],
+  "forecasts": [], "valuation": null, "disagreements": [], "monitoring": [],
+  "source_index": [{"source_id": "issuer-profile", "revision_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "category": "archive_metadata", "published_at": "2026-10-01T00:00:00+08:00", "version_summary": "合成档案身份索引", "locator": "profile:1", "storage_uri": "archive://synthetic-profile"}],
+  "artifacts": [], "gaps": [{"missing": "正式基线", "impact": "只生成候选研究", "needed_evidence": "人工采纳记录"}], "review_status": "candidate"
+}

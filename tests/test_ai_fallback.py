@@ -44,7 +44,7 @@ def test_subscription_failure_falls_back_to_current_gemini(routing, codex_failur
         codex.return_value = codex_failure
     assert ai_client.call_ai("公告") == "API 结果"
     assert api.call_args.kwargs["api_key"] == "test-google"
-    assert api.call_args.kwargs["model"] == "gemini-4-hydrogen"
+    assert api.call_args.kwargs["model"] == "gemini-3.8-flash"
 
 
 def test_subscription_and_gemini_failure_fall_back_to_dmx(routing):
@@ -53,7 +53,7 @@ def test_subscription_and_gemini_failure_fall_back_to_dmx(routing):
     api.side_effect = [RuntimeError("gemini down"), "DMX 结果"]
     assert ai_client.call_ai("公告") == "DMX 结果"
     assert [call.kwargs["api_key"] for call in api.call_args_list] == ["test-google", "test-dmx"]
-    assert [call.kwargs["model"] for call in api.call_args_list] == ["gemini-4-hydrogen", "gemini-4-hydrogen"]
+    assert [call.kwargs["model"] for call in api.call_args_list] == ["gemini-3.8-flash", "gemini-3.8-flash"]
 
 
 def test_all_backends_unavailable_return_empty(routing):

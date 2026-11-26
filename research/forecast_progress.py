@@ -3,6 +3,164 @@ from datetime import date
 
 from financials.forecast import number
 
+# Handoff metrics -> the keys `compare_with_reported_progress` reads.
+_PROGRESS_METRICS = (
+    ('revenue', 'income', 'revenue'),
+    ('parent_net_income', 'income', 'parent_net_income'),
+    ('operating_cashflow', 'cashflow', 'operating'),
+)
+
+
+def _scaled(value, unit_scale):
+    """A forecast amount in the tracker's base unit, or None when unreadable.
+
+    `unit_scale` is the multiplier from the stated value to the base unit. The
+    tracker works in the `baseline` scale declared by the handoff, so every
+    scenario row is brought to that same scale before comparison; mixing two
+    scales would make a beat look like a miss by three orders of magnitude.
+
+    The handoff carries amounts as decimal strings by contract, so they are
+    parsed here rather than assumed to be floats.
+    """
+    try:
+        amount = value if number(value) else float(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+    if not number(amount):
+        return None
+    try:
+        scale = float(unit_scale)
+    except (TypeError, ValueError):
+        return None
+    if not number(scale) or scale <= 0:
+        return None
+    return amount * scale
+
+
+def handoff_forecasts_to_progress_model(handoff, *, profile):
+    """Build the `{baseline, scenarios}` model the progress bridge consumes.
+
+    Returns None when the handoff cannot support a same-period comparison — no
+    reported-actual baseline, no annual base scenario, or inconsistent units.
+    Guessing a baseline is worse than declining: the tracker would then grade a
+    filing against a number nobody published.
+    """
+    if not isinstance(handoff, dict):
+        return None
+    issuer_id = profile.get('issuer_id') if isinstance(profile, dict) else None
+    if not issuer_id or handoff.get('issuer_id') != issuer_id:
+        return None
+    currency = None
+    forecasts = handoff.get('forecasts') or []
+    annual = [row for row in forecasts
+              if row.get('period_basis') == 'annual'
+              and str(row.get('period_end') or '').endswith('-12-31')]
+    if not annual:
+        return None
+
+    def rows_for(origin, scenario):
+        return [row for row in annual
+                if row.get('origin') == origin and row.get('scenario') == scenario]
+
+    actuals = rows_for('reported_actual', 'actual')
+    case_rows_by_case = {
+        case: (rows_for('calculated', case) or rows_for('broker_forecast', case)
+               or rows_for('research_assumption', case))
+        for case in ('base', 'bull', 'bear')
+    }
+    base_rows = case_rows_by_case['base']
+    if not base_rows:
+        return None
+
+    # Unit consistency: the baseline and every scenario row must share one
+    # scale. Two scales in one handoff is a producer bug, not something to
+    # reconcile silently here.
+    all_case_rows = [row for rows in case_rows_by_case.values() for row in rows]
+    scales = {str(row.get('unit_scale')) for row in actuals + all_case_rows
+              if row.get('unit_scale') is not None}
+    if len(scales) != 1:
+        return None
+    scale = next(iter(scales))
+    currencies = {row.get('currency') for row in actuals + all_case_rows if row.get('currency')}
+    if len(currencies) > 1:
+        return None
+    currency = next(iter(currencies), None) or 'CNY'
+
+    def year_of(row):
+        try:
+            return int(str(row['period_end'])[:4])
+        except (KeyError, ValueError):
+            return None
+
+    baseline_row = None
+    for row in actuals:
+        if row.get('metric') != 'revenue':
+            continue
+        year = year_of(row)
+        if year is None:
+            continue
+        if baseline_row is None or year > year_of(baseline_row):
+            baseline_row = row
+    if baseline_row is None or year_of(baseline_row) is None:
+        return None
+    baseline_year = year_of(baseline_row)
+    baseline = {'period_end': f'{baseline_year}-12-31', 'revenue': None,
+                'parent_net_income': None, 'operating_cashflow': None}
+    for row in actuals:
+        if year_of(row) != baseline_year:
+            continue
+        metric = row.get('metric')
+        if metric not in baseline:
+            continue
+        amount = _scaled(row.get('value'), row.get('unit_scale'))
+        if amount is not None:
+            baseline[metric] = amount
+    if baseline.get('revenue') is None:
+        return None
+
+    scenarios = {}
+    for case in ('base', 'bull', 'bear'):
+        case_rows = case_rows_by_case[case]
+        if not case_rows and case != 'base':
+            continue
+        by_year = {}
+        for row in case_rows:
+            year = year_of(row)
+            if year is None or year <= baseline_year:
+                continue
+            metric = row.get('metric')
+            target = next((entry for entry in _PROGRESS_METRICS if entry[0] == metric), None)
+            if not target:
+                continue
+            amount = _scaled(row.get('value'), row.get('unit_scale'))
+            if amount is None:
+                continue
+            _, table, key = target
+            entry = by_year.setdefault(year, {
+                'year': year, 'status': 'ready_for_review',
+                'income': {'revenue': None, 'parent_net_income': None},
+                'cashflow': {'operating': None},
+            })
+            entry[table][key] = amount
+        ready = []
+        for year in sorted(by_year):
+            entry = by_year[year]
+            if not any(value is not None for value in entry['income'].values()):
+                continue
+            ready.append(entry)
+        if ready:
+            scenarios[case] = ready
+    if 'base' not in scenarios:
+        return None
+    return {
+        'issuer_id': issuer_id, 'currency': currency, 'baseline': baseline,
+        'scenarios': scenarios,
+        # A producer-declared "accepted" is not an adoption decision; the
+        # operator owns that, so the bridge always carries a candidate marker.
+        'review_status': 'candidate',
+        'source_handoff_id': handoff.get('handoff_id'),
+    }
+
 
 def compare_with_reported_progress(model, data, *, tickers, as_of):
     if not model or model.get('issuer_id')!=data.get('issuer_id'):

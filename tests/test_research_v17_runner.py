@@ -118,3 +118,36 @@ def test_unfunded_forecast_cannot_claim_complete_research():
              'model':{'model':{'status':'needs_model_review'}}}
     with pytest.raises(ValueError,match='partial model or coverage'):
         validate_report(r,payload,t)
+
+
+def test_reason_skips_unpriced_gemini_uses_antigravity_and_falls_back_to_dmx():
+    p=resolve_profile(profile(),{});s=MemoryStore();t=plan_task(event(),p,{},as_of='2026-11-02');s.put(t)
+    class UnpricedGemini:
+        name='gemini';model='auto';input_cny_per_million=None;output_cny_per_million=None
+        def __call__(self,*a,**kw):raise AssertionError('unpriced gemini must not be called')
+    class FailingAntigravity:
+        name='antigravity';model='auto';requires_pricing=False
+        def __call__(self,*a,**kw):raise RuntimeError('agy unavailable')
+    class WorkingDmx:
+        name='dmx';model='claude-opus-4-6-high';input_cny_per_million=1.0;output_cny_per_million=2.0
+        def __call__(self,*a,**kw):
+            return {'content':json.dumps({'ok':True}),'actual_model':'claude-opus-4-6-high','input_tokens':100,'output_tokens':20}
+    out=api().reason('model',{},t,store=s,drive=Drive(),providers=[UnpricedGemini(),FailingAntigravity(),WorkingDmx()],now='2026-11-02')
+    assert out=={'ok':True}
+    assert s.get(t['task_id'])['inference'][-1]['provider']=='dmx'
+
+
+def test_reason_uses_antigravity_without_cny_budget_reservation():
+    p=resolve_profile(profile(),{});s=MemoryStore();t=plan_task(event(),p,{},as_of='2026-11-02');s.put(t)
+    class WorkingAntigravity:
+        name='antigravity';model='auto';requires_pricing=False
+        def __call__(self,*a,**kw):
+            return {'content':json.dumps({'ok':'agy'}),'actual_model':'claude-opus-5-5-high','input_tokens':40,'output_tokens':10}
+    class DmxSpy:
+        name='dmx';model='auto';input_cny_per_million=1.0;output_cny_per_million=2.0
+        def __call__(self,*a,**kw):raise AssertionError('dmx should not be called when antigravity succeeds')
+    out=api().reason('model',{},t,store=s,drive=Drive(),providers=[WorkingAntigravity(),DmxSpy()],now='2026-11-02')
+    assert out=={'ok':'agy'}
+    saved=s.get(t['task_id'])
+    assert saved['charges']==[] and saved['inference'][-1]['provider']=='antigravity'
+    assert saved['inference'][-1]['actual_model']=='claude-opus-5-5-high'

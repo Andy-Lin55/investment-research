@@ -75,30 +75,63 @@ def refresh_graph(client_id,refresh_token,post,persist):
 
 
 class APIProvider:
-    def __init__(self,name,model,key,http,*,input_rate=None,output_rate=None):
+    requires_pricing=True
+    def __init__(self,name,model,key,http,*,input_rate=None,output_rate=None,fallback_model='gemini-3.8-flash'):
         self.name=name;self.model=model;self.http=http
         self.input_cny_per_million=input_rate;self.output_cny_per_million=output_rate
+        self.fallback_model=fallback_model;self._resolved_model=None
+    def resolve_model(self):
+        configured=(self.model or '').strip()
+        if configured and configured.lower() not in {'auto','adaptive','latest'}:return configured
+        if self._resolved_model:return self._resolved_model
+        try:
+            from research.model_catalog import resolve_adaptive_model
+            listing=self.http('GET','/models')
+            ids=[row['id'] for row in (listing.get('data') or []) if isinstance(row,dict) and isinstance(row.get('id'),str)]
+            chosen=resolve_adaptive_model(ids,prefer_opus=True,preferred_tier='high')
+            self._resolved_model=chosen or self.fallback_model
+        except Exception:
+            self._resolved_model=self.fallback_model
+        return self._resolved_model
     def __call__(self,prompt,*,max_output_tokens):
-        response=self.http('POST','/chat/completions',body=dict(model=self.model,
+        selected=self.resolve_model()
+        response=self.http('POST','/chat/completions',body=dict(model=selected,
                     messages=[{'role':'user','content':prompt}],max_tokens=max_output_tokens))
         return dict(content=response['choices'][0]['message']['content'],actual_model=response.get('model'),
                     input_tokens=response.get('usage',{}).get('prompt_tokens'),
                     output_tokens=response.get('usage',{}).get('completion_tokens'))
 
 
+def _api_provider(name,key,base,prefix,env):
+    if not env.get(key):return None
+    rates=[]
+    for suffix in ('INPUT_CNY_PER_MILLION','OUTPUT_CNY_PER_MILLION'):
+        value=env.get('RESEARCH_'+prefix+'_'+suffix)
+        try:rates.append(float(value) if value is not None else None)
+        except ValueError:rates.append(None)
+    model=env.get('RESEARCH_'+prefix+'_MODEL','auto')
+    return APIProvider(name,model,env[key],HTTP(base,{'Authorization':'Bearer '+env[key]}),
+                       input_rate=rates[0],output_rate=rates[1])
+
+
 def configured_providers(env):
+    from research.antigravity import AntigravityProvider,find_executable
     providers=[]
-    for name,key,base,prefix in [('dmx','DMXAPI_KEY','https://www.dmxapi.cn/v1','DMX'),
-                                 ('gemini','GEMINI_API_KEY','https://generativelanguage.googleapis.com/v1beta/openai','GEMINI')]:
-        if not env.get(key):continue
-        rates=[]
-        for suffix in ('INPUT_CNY_PER_MILLION','OUTPUT_CNY_PER_MILLION'):
-            value=env.get('RESEARCH_'+prefix+'_'+suffix)
-            try:rates.append(float(value) if value is not None else None)
-            except ValueError:rates.append(None)
-        model=env.get('RESEARCH_'+prefix+'_MODEL','gemini-3.8-flash')
-        providers.append(APIProvider(name,model,env[key],HTTP(base,{'Authorization':'Bearer '+env[key]}),
-                                     input_rate=rates[0],output_rate=rates[1]))
+    gemini=_api_provider('gemini','GEMINI_API_KEY','https://generativelanguage.googleapis.com/v1beta/openai','GEMINI',env)
+    if gemini:providers.append(gemini)
+    in_ci=env.get('GITHUB_ACTIONS')=='true' or env.get('CI','').lower()=='true'
+    ag_flag=(env.get('RESEARCH_ANTIGRAVITY_ENABLED') or '').strip().lower()
+    cli_path=env.get('RESEARCH_ANTIGRAVITY_CLI_PATH')
+    if not in_ci and ag_flag!='false' and (ag_flag=='true' or bool(cli_path)):
+        providers.append(AntigravityProvider(
+            model=env.get('RESEARCH_ANTIGRAVITY_MODEL','auto'),
+            cli_path=cli_path,
+            preferred_tier=env.get('RESEARCH_ANTIGRAVITY_TIER','high'),
+            prefer_opus=env.get('RESEARCH_ANTIGRAVITY_PREFER_OPUS','true').lower()!='false',
+            isolate_mcp=env.get('RESEARCH_ANTIGRAVITY_ISOLATE_MCP','true').lower()!='false',
+        ))
+    dmx=_api_provider('dmx','DMXAPI_KEY','https://www.dmxapi.cn/v1','DMX',env)
+    if dmx:providers.append(dmx)
     return providers
 
 

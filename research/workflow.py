@@ -25,7 +25,7 @@ def invalidate_inputs(task,reason,*,previous=None):
     task['input_generation']=task.get('input_generation',0)+1
     task['input_digest']=digest([task['trigger'],task['profile'],task['previous_state'],task['input_generation']])
     task.update(stage_refs={},checkpoints={},retrieval_round=0,research_status=None)
-    for key in ('publication_files','publication_attempted','unresolved_data_requests','retrieval_requests','retrieval_exhausted'):
+    for key in ('publication_files','publication_attempted','unresolved_data_requests','retrieval_requests','retrieval_exhausted','handoff_followups'):
         task.pop(key,None)
 
 
@@ -166,4 +166,8 @@ def advance_task(task_id: str, *, store, adapters: dict, now: str) -> dict:
     except InputsChanged as error:
         invalidate_inputs(task,error.gaps[0]);return save('waiting_source',gaps=error.gaps)
     except StageWait as error:return save(error.status,gaps=error.gaps)
-    except Exception as error:return save('retryable_failure',last_error_type=type(error).__name__)
+    except Exception as error:
+        from research.handoff_v1 import HandoffError
+        fields={'last_error_type':type(error).__name__}
+        if isinstance(error,HandoffError):fields['last_error_code']=str(error)
+        return save('retryable_failure',**fields)

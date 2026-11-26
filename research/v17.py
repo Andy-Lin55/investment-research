@@ -36,6 +36,17 @@ def reason(stage,payload,task,*,store,drive,providers,now):
         return json.loads(response['content'])
     if not providers:raise StageWait('waiting_budget',['priced_cloud_provider_not_configured'])
     for provider in providers:
+        if getattr(provider,'requires_pricing',True) is False:
+            try:response=provider(prompt,max_output_tokens=12000)
+            except Exception:continue
+            usage=(response.get('input_tokens'),response.get('output_tokens'))
+            entry={'stage':stage,'actual_model':response.get('actual_model') or 'unreported',
+                   'provider':provider.name,'cost_cny':0,'input_ref':input_ref}
+            if all(type(x) is int and x>=0 for x in usage):
+                entry.update(input_tokens=usage[0],output_tokens=usage[1])
+            task.setdefault('inference',[]).append(entry);store.put(task)
+            try:return json.loads(response['content'])
+            except (ValueError,KeyError):raise StageWait('quality_blocked',['invalid_reasoning_json'])
         rates=(provider.input_cny_per_million,provider.output_cny_per_million)
         if any(not number(x) or x<0 for x in rates):continue
         ceiling=((len(prompt.encode())+256)*rates[0]+12000*rates[1])/1e6
@@ -44,7 +55,8 @@ def reason(stage,payload,task,*,store,drive,providers,now):
         fresh=store.get(task['task_id'])
         old=next((a for a in fresh['attempts'] if a['attempt_id']==attempt_id),None)
         if old:raise StageWait('waiting_budget',['prior_attempt_needs_confirmation'])
-        attempt={'attempt_id':attempt_id,'stage':stage,'status':'inflight','provider':provider.name,'requested_model':provider.model}
+        requested_model=provider.resolve_model() if hasattr(provider,'resolve_model') else provider.model
+        attempt={'attempt_id':attempt_id,'stage':stage,'status':'inflight','provider':provider.name,'requested_model':requested_model}
         try:fresh=Budget(store).reserve(fresh,ceiling,now,attempt_id,attempt=attempt)
         except BudgetBlocked:raise StageWait('waiting_budget',['model_budget_reached'])
         task.update(fresh)
@@ -66,7 +78,7 @@ def reason(stage,payload,task,*,store,drive,providers,now):
     raise StageWait('waiting_budget',['pricing_unknown'])
 
 
-def build_adapters(*,store,drive,reports,env,documents,reasoner=None,baseline=None,prepublish=None,retrieval=None,prior_context=None,financial_data=None):
+def build_adapters(*,store,drive,reports,env,documents,reasoner=None,baseline=None,prepublish=None,retrieval=None,prior_context=None,financial_data=None,followups=None):
     """Connect actual archive, model, report and delivery boundaries to v17 stages."""
     from research.financial_coverage import build_coverage
     from research.forecast_inputs import build_candidate_inputs
@@ -154,10 +166,39 @@ def build_adapters(*,store,drive,reports,env,documents,reasoner=None,baseline=No
         candidate['management_guidance_comparison'] = compare_management_guidance(
             candidate.get('model'), payload['coverage']['documents'], issuer_id=task['issuer_id'],
             as_of=task.get('updated_at',task['created_at'])[:10])
-        from research.forecast_progress import compare_with_reported_progress
+        from research.forecast_progress import (
+            compare_with_reported_progress, handoff_forecasts_to_progress_model,
+        )
         candidate['forecast_progress']=compare_with_reported_progress(candidate.get('model'),
             payload['coverage'].get('financial_data',{}),tickers=task['profile']['tickers'],
             as_of=task.get('updated_at',task['created_at'])[:10])
+        handoff_items=[item.get('handoff') for item in (payload['coverage'].get('prior_context',[]) or [])
+                       if isinstance(item,dict) and isinstance(item.get('handoff'),dict)]
+        handoff_items.sort(
+            key=lambda h:(str(h.get('knowledge_cutoff') or ''),str((h.get('producer') or {}).get('created_at') or '')),
+            reverse=True,
+        )
+        handoff_followups=[]
+        for handoff in handoff_items:
+            model=handoff_forecasts_to_progress_model(handoff,profile=task['profile'])
+            if not candidate['forecast_progress'] and model:
+                # No locally-built model yet: a validated Workbench handoff
+                # carries the same three-scenario baseline, so the filing can
+                # still be graded instead of being recorded as "no benchmark".
+                progress=compare_with_reported_progress(model,
+                    payload['coverage'].get('financial_data',{}),tickers=task['profile']['tickers'],
+                    as_of=task.get('updated_at',task['created_at'])[:10])
+                if progress:
+                    candidate['forecast_progress']=dict(progress,baseline_source='workbench_handoff',
+                        handoff_id=model.get('source_handoff_id'))
+            from research.followups import items_from_handoff
+            handoff_followups.extend(items_from_handoff(handoff,issuer_id=task['issuer_id'],
+                origin_task=task['task_id'],origin_publication=handoff.get('handoff_id') or 'workbench_handoff'))
+        if handoff_followups:
+            # Seeded here so the delivery stage can file the handoff's monitoring
+            # conditions alongside the report's own next actions.
+            task['handoff_followups']=handoff_followups
+            store.put(task)
         candidate['candidate_status']=candidate['status'];candidate['status']='ready' if candidate.get('model') and candidate['model']['status']=='ready_for_review' else 'partial'
         from research.existing_data import broker_history
         candidate['historical_tables']=payload['coverage'].get('financial_data',{}).get('historical_tables',[])
@@ -231,6 +272,29 @@ def build_adapters(*,store,drive,reports,env,documents,reasoner=None,baseline=No
         attempted=task.get('publication_attempted',False);task['publication_attempted']=True;store.put(task)
         saved=reports.publish(task,analysis,files,candidate=True,lookup_only=attempted)
         if not saved or saved.get('verified') is not True:raise StageWait('waiting_source',['publication_confirmation_required'])
+        if followups is not None:
+            from research.followups import items_from_report
+            report_candidates=(
+                items_from_report(task,r)
+                if isinstance(r.get('next_actions'),list) and isinstance(r.get('open_questions'),list)
+                else []
+            )
+            candidates=report_candidates+list(task.get('handoff_followups') or [])
+            seen=set()
+            checkpoints=task.setdefault('checkpoints',{})
+            receipts=checkpoints.setdefault('followups',{})
+            attempted_keys=checkpoints.setdefault('followups_attempted',[])
+            for item in candidates:
+                if item.get('key') in seen:continue
+                seen.add(item['key'])
+                if item['key'] in receipts:continue
+                uncertain=item['key'] in attempted_keys
+                if not uncertain:
+                    attempted_keys.append(item['key']);store.put(task)
+                receipt=followups.ensure(item,report_ref=saved,lookup_only=uncertain)
+                if not receipt or receipt.get('verified') is not True:
+                    raise StageWait('waiting_source',['followup_confirmation_required'])
+                receipts[item['key']]=receipt;store.put(task)
         return dict(saved,input_digest=task['input_digest'],issuer_id=task['issuer_id'])
     return dict(coverage=coverage,retrieval=retrieve,model=model,judgment=judgment,report=report,archive=archive,
         read=lambda ref:json.loads(drive.read(ref['path'])[0]),baseline=baseline_check,publish=publish,

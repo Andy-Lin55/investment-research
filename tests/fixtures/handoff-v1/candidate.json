@@ -1,0 +1,19 @@
+{
+  "schema_version": "1.0",
+  "handoff_id": "demo-issuer-a-v1",
+  "issuer_id": "issuer-a",
+  "securities": [{"market": "CN", "ticker": "000001.SZ", "currency": "CNY", "share_class": "A"}],
+  "producer": {"project": "research-workbench", "run_id": "synthetic-run", "git_commit": "synthetic", "created_at": "2026-10-31T09:00:00+08:00"},
+  "knowledge_cutoff": "2026-10-29T23:00:00+08:00",
+  "parent_handoff_id": null,
+  "research_question": "回款能否支持增长？",
+  "theses": [{"thesis_id": "cash-conversion", "claim": "回款应追上收入增长", "driver": "应收周转", "falsifier": "应收持续快于收入", "evidence_refs": ["disclosure-h1"], "status": "candidate"}],
+  "forecasts": [{"metric": "revenue", "period_start": "2026-01-01", "period_end": "2026-12-31", "period_basis": "annual", "value": "195.05", "currency": "CNY", "unit_scale": "100000000", "scope": "consolidated", "ownership_basis": "group", "origin": "research_assumption", "scenario": "base", "source_refs": ["disclosure-h1"]}],
+  "valuation": null,
+  "disagreements": [],
+  "monitoring": [{"question_id": "cash-collections", "condition": "年报披露经营现金流", "due_date": "2027-04-30", "verification": "年报现金流量表", "action": "复核现金兑现假设"}],
+  "source_index": [{"source_id": "disclosure-h1", "revision_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "category": "issuer_disclosure", "published_at": "2026-08-25T10:00:00+08:00", "version_summary": "合成样本原始版", "locator": "p3", "storage_uri": "archive://synthetic-h1"}],
+  "artifacts": [],
+  "gaps": [{"missing": "年报现金流", "impact": "无法确认全年现金兑现", "needed_evidence": "2026年年报"}],
+  "review_status": "candidate"
+}

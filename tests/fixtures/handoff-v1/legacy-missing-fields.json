@@ -1,0 +1,9 @@
+{
+  "schema_version": "0.9",
+  "handoff_id": "legacy-draft",
+  "issuer_id": "issuer-a",
+  "as_of": "2026-10-29",
+  "hypotheses": [{"id": "cash-conversion", "claim": "增长应转化为现金"}],
+  "sources": [{"id": "filing", "date": "2026-08-25"}],
+  "review_status": "candidate"
+}

@@ -169,7 +169,14 @@ def process(task_id,*,store,drive,reports,providers,budget,day,model=None,follow
         except Exception as error:return state('retry_delivery',error)
     if followups is not None:
         from research.followups import items_from_report
-        for item in items_from_report(task,task['analysis']['report']):
+        # A validated Workbench handoff files its monitoring conditions here
+        # too; without them the coverage view's falsifiers never become a
+        # scheduled check and are only re-read when someone opens the report.
+        candidates=items_from_report(task,task['analysis']['report'])+list(task.get('handoff_followups') or [])
+        seen=set()
+        for item in candidates:
+            if item.get('key') in seen:continue
+            seen.add(item.get('key'))
             receipts=task['checkpoints'].setdefault('followups',{})
             if item['key'] in receipts:continue
             attempted=task['checkpoints'].setdefault('followups_attempted',[])

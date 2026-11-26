@@ -30,6 +30,46 @@ def items_from_report(task,report):
     return list(unique.values())
 
 
+def items_from_handoff(handoff, *, issuer_id, origin_task, origin_publication):
+    """Conditions a validated Workbench handoff wants watched, as follow-ups.
+
+    Only `monitoring[]` and `gaps[]` become items. The thesis claims stay in
+    the prompt context: turning an argued claim into a checkbox would let a
+    scheduled job "close" an investment view nobody re-examined.
+    """
+    if not isinstance(handoff,dict):raise ValueError('handoff object required')
+    if handoff.get('issuer_id')!=issuer_id:raise ValueError('handoff issuer differs')
+    items=[]
+    for entry in handoff.get('monitoring') or []:
+        condition=str(entry.get('condition') or '').strip()
+        action=str(entry.get('action') or '').strip()
+        if not condition or not action:continue
+        due=entry.get('due_date')
+        if due is not None:
+            date.fromisoformat(str(due)[:10])
+        items.append(dict(
+            kind='conditional_action',condition=condition,action=action,
+            due=str(due)[:10] if due else None,evidence=[],
+            verification=str(entry.get('verification') or ''),
+            source_ref=entry.get('question_id') or entry.get('metric_id'),
+        ))
+    for entry in handoff.get('gaps') or []:
+        missing=str(entry.get('missing') or '').strip()
+        if not missing:continue
+        needed=str(entry.get('needed_evidence') or '').strip()
+        items.append(dict(
+            kind='open_question',
+            question=missing if not needed else f'{missing}（需补充：{needed}）',
+            due=None,evidence=[],
+        ))
+    unique={}
+    for item in items:
+        item.update(issuer_id=issuer_id,origin_task=origin_task,origin_publication=origin_publication,
+                    handoff_id=handoff.get('handoff_id'))
+        item['key']=identity(item);unique.setdefault(item['key'],item)
+    return list(unique.values())
+
+
 class NotionFollowups:
     def __init__(self,http,data_source):
         if not data_source:raise ValueError('dedicated follow-up data source required')

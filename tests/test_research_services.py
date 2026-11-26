@@ -89,3 +89,25 @@ def test_local_authorization_cache_counts_as_present_without_printing_token(tmp_
     result=api().doctor({'ONEDRIVE_TOKEN_CACHE':str(cache)})
     assert 'ONEDRIVE_REFRESH_TOKEN' not in result['missing']
     assert 'private-secret' not in json.dumps(result)
+
+
+def test_configured_providers_order_gemini_then_antigravity_then_dmx(tmp_path,monkeypatch):
+    monkeypatch.delenv('CI',raising=False);monkeypatch.delenv('GITHUB_ACTIONS',raising=False)
+    agy=tmp_path/'agy';agy.write_text('#!/bin/sh\nexit 0\n');agy.chmod(0o755)
+    env={'GEMINI_API_KEY':'g-key','DMXAPI_KEY':'d-key','RESEARCH_ANTIGRAVITY_CLI_PATH':str(agy)}
+    assert [p.name for p in api().configured_providers(env)]==['gemini','antigravity','dmx']
+    assert [p.name for p in api().configured_providers(dict(env,GITHUB_ACTIONS='true'))]==['gemini','dmx']
+
+
+def test_api_provider_auto_selects_opus_from_models_endpoint():
+    calls=[]
+    def http(method,path,**kwargs):
+        calls.append((method,path,kwargs.get('body')))
+        if method=='GET' and path=='/models':
+            return {'data':[{'id':'gemini-3.8-flash'},{'id':'claude-opus-4-6-high'},{'id':'claude-sonnet-4-6-high'}]}
+        return {'model':kwargs['body']['model'],'usage':{'prompt_tokens':10,'completion_tokens':5},
+                'choices':[{'message':{'content':'{}'}}]}
+    p=api().APIProvider('dmx','auto','key',http,input_rate=1,output_rate=2)
+    out=p('prompt',max_output_tokens=100)
+    assert out['actual_model']=='claude-opus-4-6-high'
+    assert calls[1][2]['model']=='claude-opus-4-6-high'

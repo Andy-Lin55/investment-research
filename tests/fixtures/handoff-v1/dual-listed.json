@@ -1,0 +1,12 @@
+{
+  "schema_version": "1.0", "handoff_id": "dual-listed-v1", "issuer_id": "issuer-hk",
+  "securities": [{"market": "CN", "ticker": "600001.SH", "currency": "CNY", "share_class": "A"}, {"market": "HK", "ticker": "0001.HK", "currency": "HKD", "share_class": "H"}],
+  "producer": {"project": "synthetic-workbench", "run_id": "dual-listed", "git_commit": "synthetic", "created_at": "2026-10-10T09:00:00+08:00"},
+  "knowledge_cutoff": "2026-10-09T23:00:00+08:00", "parent_handoff_id": null,
+  "research_question": "两地证券的财务口径是否一致？",
+  "theses": [{"thesis_id": "currency-risk", "claim": "汇率变化可能改变H股估值", "driver": "换汇", "falsifier": "同口径汇率对估值影响不显著", "status": "candidate", "evidence_refs": ["filing"]}],
+  "forecasts": [{"metric": "net_income", "period_start": "2026-01-01", "period_end": "2026-12-31", "period_basis": "annual", "value": "100", "currency": "CNY", "unit_scale": "1000000", "scope": "consolidated", "ownership_basis": "attributable", "origin": "broker_forecast", "scenario": "base", "source_refs": ["filing"]}],
+  "valuation": null, "disagreements": [], "monitoring": [],
+  "source_index": [{"source_id": "filing", "revision_id": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "category": "sell_side_estimate", "published_at": "2026-10-01T00:00:00+08:00", "version_summary": "合成券商观点", "locator": "p7", "storage_uri": "archive://synthetic-filing"}],
+  "artifacts": [], "gaps": [{"missing": "HKD换汇证据", "impact": "不能直接计算H股差额", "needed_evidence": "相应日期的外汇汇率"}], "review_status": "candidate"
+}

@@ -92,6 +92,19 @@ def compact_material(payload,task):
             if used+len(page['text'])<=broker_limit:selected.append(page);used+=len(page['text'])
         broker['pages']=sorted(selected,key=lambda p:p['page']);broker['omitted_pages']=[p['page'] for p in pages if p not in selected]
     for item in coverage.get('prior_context',[]):
+        if item.get('handoff'):
+            item.pop('source_text',None)
+            handoff=item.pop('handoff')
+            item['handoff_summary']={key:handoff[key] for key in
+                ('schema_version','handoff_id','issuer_id','producer','knowledge_cutoff',
+                 'research_question','theses','monitoring','gaps')}
+            item['handoff_summary']['review_status']='candidate'
+            item['handoff_summary']['declared_review_status']=handoff['review_status']
+            item['handoff_summary']['source_index']=[{key:src[key] for key in
+                ('source_id','revision_id','category','published_at','version_summary','locator')}
+                for src in handoff['source_index']]
+            item.pop('source_index',None)
+            item.pop('declared_review_status',None)
         if item.get('source_text') and len(item['source_text'])>6000:
             item['source_text']=item['source_text'][:6000];item['partial']=True
         snapshot=item.get('financial_snapshot')

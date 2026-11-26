@@ -5,16 +5,21 @@ import hashlib,json,re
 from financials.forecast import digest
 from research import sources
 from research.delivery import NotionTaskStore,NotionReports,ServiceError
+from research.followups import NotionFollowups
 from research.financial_coverage import FULL
 from research.workflow import StageWait,InputsChanged,control,company_state,plan_task,advance_task
 from research.profiles import resolve_profile
 from research.discovery import discover_events
 
 
-def load_prior_context(profile,drive,http):
+def load_prior_context(profile,drive,http,research_cutoff=None):
     from pathlib import PurePosixPath
     from research.context import notion_text
+    from research.handoff_v1 import load_handoffs
     root=profile['company_path']+'/';items=[];gaps=[]
+    if profile.get('handoffs'):
+        if research_cutoff is None:raise ValueError('handoff research cutoff required')
+        items.extend(load_handoffs(profile,drive,research_cutoff))
     files=profile.get('context_files',[])
     if len(files)>30 or len(profile.get('context_pages',[]))>10:raise ValueError('prior-context bounds exceeded')
     for entry in files:
@@ -319,6 +324,7 @@ def run(args,env):
         result={'queued':queued,'screened':len(profiles)}
     else:
         reports=NotionReports(http,env['RESEARCH_NOTION_REPORTS_SOURCE_ID'])
+        followups=NotionFollowups(http,env['RESEARCH_NOTION_FOLLOWUPS_SOURCE_ID']) if env.get('RESEARCH_NOTION_FOLLOWUPS_SOURCE_ID') else None
         def existing_financial_data(task):
             if task['profile']['market']=='CN' and not env.get('TUSHARE_TOKEN'):
                 return {'gaps':['research_tushare_token_not_configured'],'market_snapshot':None,'historical_tables':[]}
@@ -328,8 +334,9 @@ def run(args,env):
             except (ValueError,OSError,ServiceError) as error:
                 return {'gaps':['financial_source_unavailable:'+type(error).__name__],'market_snapshot':None,'historical_tables':[]}
         adapters=build_adapters(store=store,drive=drive,reports=reports,env=env,documents=source.documents,
-            prepublish=source.prepublish,retrieval=broker_adapter(store,drive,env),
-            prior_context=lambda task:load_prior_context(task['profile'],drive,http),
+            prepublish=source.prepublish,retrieval=broker_adapter(store,drive,env),followups=followups,
+            prior_context=lambda task:load_prior_context(task['profile'],drive,http,
+                task['created_at'][:10]+'T00:00:00+00:00'),
             financial_data=existing_financial_data)
         active={p['issuer_id'] for p in profiles};result={}
         candidates=[t for t in store.list() if t.get('workflow_contract')=='holdings-v17' and t['issuer_id'] in active
